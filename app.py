@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import sys
 import os
 import time
@@ -28,12 +27,11 @@ config_path = os.path.join(BASE_DIR, 'config.json')
 os.makedirs(single_dir, exist_ok=True)
 os.makedirs(pool_dir, exist_ok=True)
 
-# Default configuration (Floyd–Steinberg as default)
 default_config = {
-    "mode":          "single",            # "single" | "pool" | "art"
-    "single_image":  "",                  # filename under pic/single/
-    "pool_images":   [],                  # list of filenames under pic/pool/
-    "dithering":     "floyd-steinberg"    # one of: floyd-steinberg, atkinson, shiau-fan-2, jarvis-judice-ninke, stucki, burkes
+    "mode":          "single",
+    "single_image":  "",
+    "pool_images":   [],
+    "dithering":     "floyd-steinberg"
 }
 
 def load_config():
@@ -50,30 +48,24 @@ def save_config():
 
 config = load_config()
 
-# ==== E-Paper Initialization ====
+# ==== E-Paper Setup ====
 epd = epd13in3E.EPD()
 try:
-    print("Initializing EPD...")
     epd.Init()
-    print("Clearing display...")
     epd.Clear()
+    epd.sleep()
 except Exception as e:
-    print("EPD initialization error:", e)
+    print("EPD init error:", e)
 
 def get_target_size():
-    # Always landscape (width > height)
     return (max(epd.width, epd.height), min(epd.width, epd.height))
 
-# Prepare 6-color palette once
+# prepare palette
 _custom_palette = [
-    255,0,0,    # red
-    0,255,0,    # green
-    0,0,255,    # blue
-    255,255,0,  # yellow
-    0,0,0,      # black
-    255,255,255 # white
-] + [0] * (768 - 6*3)
-_palette_img = Image.new("P", (1,1))
+    255,0,0,0,255,0,0,0,255,
+    255,255,0,0,0,0,255,255,255
+] + [0]*(768-18)
+_palette_img = Image.new("P",(1,1))
 _palette_img.putpalette(_custom_palette)
 
 # ==== Dithering Algorithms ====
@@ -179,6 +171,32 @@ def burkes_dither(image):
 
 # ==== Image Processing & Display ====
 
+# ==== Image process & display ====
+update_counter = 0
+counter_lock = threading.Lock()
+
+def display_image(image):
+    global update_counter
+    with counter_lock:
+        update_counter += 1
+        count = update_counter
+
+    # On every 10th update, do a full clear first
+    if count % 10 == 0:
+        epd.Init()
+        epd.Clear()
+        epd.sleep()
+
+    # Standard update
+    epd.Init()
+    img = ImageOps.fit(image, get_target_size(), method=Image.Resampling.LANCZOS)
+    dithered = apply_dithering(img, config['dithering'])
+    buf = epd.getbuffer(dithered)
+    epd.display(buf)
+    epd.sleep()
+
+    return dithered
+
 def process_image(path_or_file):
     img = Image.open(path_or_file).convert("RGB")
     img = ImageOps.exif_transpose(img)
@@ -191,46 +209,54 @@ def process_image(path_or_file):
     return img
 
 current_image = None
-rendered_image_data = None
-rendering_complete  = False
+rendered_data = None
+rendering_complete = False
 
-def update_epaper(image):
-    global current_image, rendered_image_data, rendering_complete
+def update_epaper_thread(image):
+    global current_image, rendered_data, rendering_complete
     try:
-        epd.Init()
-        img = ImageOps.fit(image, get_target_size(), method=Image.Resampling.LANCZOS)
-        d = apply_dithering(img, config.get("dithering", "floyd-steinberg"))
-        buf = epd.getbuffer(d)
-        epd.display(buf)
-        epd.sleep()
-
+        d = display_image(image)
         current_image = d
-        bufio = io.BytesIO()
-        d.rotate(180).save(bufio, format="PNG")
-        rendered_image_data = base64.b64encode(bufio.getvalue()).decode('utf-8')
+        buf = io.BytesIO()
+        d.rotate(180).save(buf, format="PNG")
+        rendered_data = base64.b64encode(buf.getvalue()).decode('utf-8')
         rendering_complete = True
     except Exception as e:
         print("EPD update error:", e)
         rendering_complete = False
 
-# Run initial display in background so Flask can start immediately
 def initial_display():
-    m = config.get("mode")
-    if m == "single" and config["single_image"]:
-        p = os.path.join(single_dir, config["single_image"])
+    m = config['mode']
+    if m == 'single' and config['single_image']:
+        p = os.path.join(single_dir, config['single_image'])
         if os.path.exists(p):
-            update_epaper(process_image(p))
-    elif m == "pool" and config["pool_images"]:
-        fn = random.choice(config["pool_images"])
-        p  = os.path.join(pool_dir, fn)
+            update_epaper_thread(process_image(p))
+    elif m == 'pool' and config['pool_images']:
+        fn = random.choice(config['pool_images'])
+        p = os.path.join(pool_dir, fn)
         if os.path.exists(p):
-            update_epaper(process_image(p))
-    elif m == "art":
-        print("Art-of-the-Day mode (not implemented).")
-    else:
-        print("No image to display for mode:", m)
+            update_epaper_thread(process_image(p))
 
 threading.Thread(target=initial_display, daemon=True).start()
+
+# ==== Flask & inactivity ====
+app = Flask(__name__)
+last_activity = time.time()
+TIMEOUT = 20*60
+
+@app.before_request
+def touch():
+    global last_activity
+    last_activity = time.time()
+
+def watchdog():
+    while True:
+        time.sleep(60)
+        if time.time()-last_activity>TIMEOUT:
+            os.system("sudo shutdown now")
+            break
+
+threading.Thread(target=watchdog, daemon=True).start()
 
 # ==== Flask App & Inactivity Monitor ====
 
