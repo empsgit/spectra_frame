@@ -232,7 +232,7 @@ def initial_display():
     else:
         print("No image for mode:", m)
 
-initial_display()
+threading.Thread(target=initial_display, daemon=True).start()
 
 # ==== Flask App + Inactivity Monitor ====
 
