@@ -1,5 +1,4 @@
-# File: picture_frame.py
-
+#!/usr/bin/env python3
 import sys
 import os
 import time
@@ -8,17 +7,16 @@ import io
 import base64
 import json
 import random
-import os
-picdir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'pic')
-libdir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'lib')
-print(libdir)
-if os.path.exists(libdir):
-    sys.path.append(libdir)
-    
+
 from flask import Flask, request, render_template_string, jsonify
 from werkzeug.utils import secure_filename
 from PIL import Image, ImageOps, ImageEnhance
-import epd13in3E  # Using the provided e-paper module
+
+# Add local lib directory for Waveshare e-paper driver
+libdir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'lib')
+if os.path.exists(libdir):
+    sys.path.append(libdir)
+import epd13in3E  # Waveshare 13.3" E-Paper module
 
 # ==== Directories & Config ====
 BASE_DIR    = os.path.dirname(os.path.realpath(__file__))
@@ -30,11 +28,12 @@ config_path = os.path.join(BASE_DIR, 'config.json')
 os.makedirs(single_dir, exist_ok=True)
 os.makedirs(pool_dir, exist_ok=True)
 
+# Default configuration (Floyd–Steinberg as default)
 default_config = {
     "mode":          "single",            # "single" | "pool" | "art"
     "single_image":  "",                  # filename under pic/single/
     "pool_images":   [],                  # list of filenames under pic/pool/
-    "dithering":     "floyd-steinberg"    # one of: "floyd-steinberg", "atkinson", "shiau-fan-2", "jarvis-judice-ninke", "stucki", "burkes"
+    "dithering":     "floyd-steinberg"    # one of: floyd-steinberg, atkinson, shiau-fan-2, jarvis-judice-ninke, stucki, burkes
 }
 
 def load_config():
@@ -65,7 +64,7 @@ def get_target_size():
     # Always landscape (width > height)
     return (max(epd.width, epd.height), min(epd.width, epd.height))
 
-# prepare the 6-color palette
+# Prepare 6-color palette once
 _custom_palette = [
     255,0,0,    # red
     0,255,0,    # green
@@ -77,15 +76,14 @@ _custom_palette = [
 _palette_img = Image.new("P", (1,1))
 _palette_img.putpalette(_custom_palette)
 
-# ---- Ditherers ----
+# ==== Dithering Algorithms ====
 
 def apply_dithering(image, algorithm):
     """
-    Dispatch to the chosen error-diffusion algorithm.
+    Convert a PIL-RGB image into our 6-color palette using the selected algorithm.
     """
     if algorithm == "floyd-steinberg":
-        return image.convert("RGB") \
-                    .convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
+        return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
     if algorithm == "atkinson":
         return atkinson_dither(image)
     if algorithm == "shiau-fan-2":
@@ -97,8 +95,7 @@ def apply_dithering(image, algorithm):
     if algorithm == "burkes":
         return burkes_dither(image)
     # fallback
-    return image.convert("RGB") \
-                .convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
+    return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
 
 def atkinson_dither(image):
     img = image.convert("RGB")
@@ -113,12 +110,12 @@ def atkinson_dither(image):
             err = tuple(old[i]-new[i] for i in range(3))
             for dx,dy in [(1,0),(2,0),(-1,1),(0,1),(1,1),(0,2)]:
                 nx, ny = x+dx, y+dy
-                if 0<=nx<w and 0<=ny<h:
+                if 0 <= nx < w and 0 <= ny < h:
                     r,g,b = pixels[nx,ny]
                     pixels[nx,ny] = (
-                        max(0,min(255,r + err[0]//8)),
-                        max(0,min(255,g + err[1]//8)),
-                        max(0,min(255,b + err[2]//8))
+                        max(0, min(255, r + err[0]//8)),
+                        max(0, min(255, g + err[1]//8)),
+                        max(0, min(255, b + err[2]//8))
                     )
     return img.convert("P", palette=_palette_img, dither=Image.NONE)
 
@@ -138,14 +135,14 @@ def error_diffusion(image, kernel, divisor, anchor):
             for dy in range(kh):
                 for dx in range(kw):
                     val = kernel[dy][dx]
-                    if val==0: continue
+                    if val == 0: continue
                     nx, ny = x + dx - ax, y + dy - ay
-                    if 0<=nx<w and 0<=ny<h:
+                    if 0 <= nx < w and 0 <= ny < h:
                         r,g,b = pixels[nx,ny]
                         pixels[nx,ny] = (
-                            max(0,min(255,r + err[0]*val//divisor)),
-                            max(0,min(255,g + err[1]*val//divisor)),
-                            max(0,min(255,b + err[2]*val//divisor))
+                            max(0, min(255, r + err[0]*val//divisor)),
+                            max(0, min(255, g + err[1]*val//divisor)),
+                            max(0, min(255, b + err[2]*val//divisor))
                         )
     return img.convert("P", palette=_palette_img, dither=Image.NONE)
 
@@ -159,24 +156,24 @@ def shiaufan2_dither(image):
 
 def jarvis_judice_ninke_dither(image):
     kernel = [
-        [0,0,    7,    5,    3],
-        [3,5,    7,    5,    3],
-        [1,3,    5,    3,    1]
+        [0,0,   7,   5,   3],
+        [3,5,   7,   5,   3],
+        [1,3,   5,   3,   1]
     ]
     return error_diffusion(image, kernel, divisor=48, anchor=(2,0))
 
 def stucki_dither(image):
     kernel = [
-        [0,0,    8,    4,    2],
-        [2,4,    8,    4,    2],
-        [1,2,    4,    2,    1]
+        [0,0,   8,   4,   2],
+        [2,4,   8,   4,   2],
+        [1,2,   4,   2,   1]
     ]
     return error_diffusion(image, kernel, divisor=42, anchor=(2,0))
 
 def burkes_dither(image):
     kernel = [
-        [0,0,    8,    4,    0],
-        [2,4,    8,    4,    2]
+        [0,0,   8,   4,   0],
+        [2,4,   8,   4,   2]
     ]
     return error_diffusion(image, kernel, divisor=32, anchor=(2,0))
 
@@ -216,54 +213,59 @@ def update_epaper(image):
         print("EPD update error:", e)
         rendering_complete = False
 
+# Run initial display in background so Flask can start immediately
 def initial_display():
     m = config.get("mode")
-    if m=="single" and config["single_image"]:
+    if m == "single" and config["single_image"]:
         p = os.path.join(single_dir, config["single_image"])
         if os.path.exists(p):
             update_epaper(process_image(p))
-    elif m=="pool" and config["pool_images"]:
+    elif m == "pool" and config["pool_images"]:
         fn = random.choice(config["pool_images"])
         p  = os.path.join(pool_dir, fn)
         if os.path.exists(p):
             update_epaper(process_image(p))
-    elif m=="art":
+    elif m == "art":
         print("Art-of-the-Day mode (not implemented).")
     else:
-        print("No image for mode:", m)
+        print("No image to display for mode:", m)
 
 threading.Thread(target=initial_display, daemon=True).start()
 
-# ==== Flask App + Inactivity Monitor ====
+# ==== Flask App & Inactivity Monitor ====
 
 app = Flask(__name__)
 last_activity = time.time()
-TIMEOUT      = 20*60
+TIMEOUT       = 20 * 60  # 20 minutes
 
 @app.before_request
-def touch():
+def touch_activity():
     global last_activity
     last_activity = time.time()
 
-def watchdog():
+def inactivity_watchdog():
     while True:
         time.sleep(60)
         if time.time() - last_activity > TIMEOUT:
-            print("No activity 20m → shutting down")
+            print("No activity for 20 minutes; shutting down.")
             os.system("sudo shutdown now")
             break
 
-threading.Thread(target=watchdog, daemon=True).start()
+threading.Thread(target=inactivity_watchdog, daemon=True).start()
 
 # ==== Web UI Template ====
 
 INDEX_HTML = """
-<!doctype html><html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Spectra 6 Frame</title>
-<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
-<style>body{padding:20px;} .section{margin-bottom:30px;}</style>
-</head><body>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Spectra 6 Picture Frame</title>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+  <style>body{padding:20px;} .section{margin-bottom:30px;}</style>
+</head>
+<body>
   <h1 class="mb-4">Spectra 6 Picture Frame</h1>
 
   <div class="section">
@@ -312,36 +314,39 @@ INDEX_HTML = """
   </div>
 
 <script>
-function showMsg(txt,cls="info"){
-  document.getElementById('msg').innerHTML = 
-    `<div class="alert alert-${cls}">${txt}</div>`;
+function showMsg(txt, cls="info") {
+  document.getElementById('msg').innerHTML = `<div class="alert alert-${cls}">${txt}</div>`;
 }
-function poll(){
+
+function pollPreview() {
   fetch('/preview').then(r=>r.json()).then(d=>{
-    if(d.success){
-      document.getElementById('preview').src = 
-        "data:image/png;base64,"+d.rendered_image;
-      showMsg("Done!","success");
+    if (d.success) {
+      document.getElementById('preview').src = "data:image/png;base64," + d.rendered_image;
+      showMsg("Done!", "success");
     } else {
-      showMsg("Rendering...","info");
-      setTimeout(poll,2000);
+      showMsg("Rendering...", "info");
+      setTimeout(pollPreview, 2000);
     }
   });
 }
-function loadPool(){
+
+function loadPool() {
   fetch('/pool/list').then(r=>r.json()).then(arr=>{
-    const ul=document.getElementById('poolList'); ul.innerHTML="";
-    arr.forEach(fn=>{
-      const li=document.createElement('li');
-      li.textContent=fn+" ";
-      const btn=document.createElement('button');
-      btn.textContent="Remove";
-      btn.className="btn btn-sm btn-danger ml-2";
-      btn.onclick=()=>fetch('/mode/pool/remove',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({filename:fn})
-      }).then(loadPool);
+    const ul = document.getElementById('poolList');
+    ul.innerHTML = "";
+    arr.forEach(fn => {
+      const li = document.createElement('li');
+      li.textContent = fn + " ";
+      const btn = document.createElement('button');
+      btn.textContent = "Remove";
+      btn.className = "btn btn-sm btn-danger ml-2";
+      btn.onclick = () => {
+        fetch('/mode/pool/remove', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({filename: fn})
+        }).then(loadPool);
+      };
       li.appendChild(btn);
       ul.appendChild(li);
     });
@@ -349,46 +354,74 @@ function loadPool(){
 }
 
 // Handlers
-document.getElementById('singleForm').onsubmit=e=>{
-  e.preventDefault(); showMsg("Uploading...","info");
-  fetch('/mode/single',{method:'POST',body:new FormData(e.target)})
-    .then(_=>{ showMsg("Rendering...","info"); poll(); });
-};
-document.getElementById('addPoolForm').onsubmit=e=>{
-  e.preventDefault(); showMsg("Adding...","info");
-  fetch('/mode/pool/add',{method:'POST',body:new FormData(e.target)})
-    .then(_=>{ showMsg("Done","success"); loadPool(); });
-};
-document.getElementById('setPool').onclick=_=>{
-  showMsg("Setting pool...","info");
-  fetch('/mode/pool/set',{method:'POST'})
-    .then(_=>{ showMsg("Rendering...","info"); poll(); });
-};
-document.getElementById('setDither').onclick=_=>{
-  const alg=document.getElementById('ditherSelect').value;
-  showMsg("Applying dither...","info");
-  fetch('/mode/dither/set',{method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({algorithm:alg})
-  }).then(_=>{ showMsg("Rendering...","info"); poll(); });
-};
-document.getElementById('setArt').onclick=_=>{
-  showMsg("Art mode...","info");
-  fetch('/mode/art/set',{method:'POST'}).then(_=>showMsg("Done","warning"));
-};
-document.getElementById('rotateBtn').onclick=_=>{
-  showMsg("Rotating...","info");
-  fetch('/rotate',{method:'GET'}).then(_=>{ showMsg("Rendering...","info"); poll(); });
+document.getElementById('singleForm').onsubmit = e => {
+  e.preventDefault();
+  showMsg("Uploading...", "info");
+  fetch('/mode/single', {method:'POST', body:new FormData(e.target)})
+    .then(()=>{
+      showMsg("Rendering...", "info");
+      pollPreview();
+    });
 };
 
-// Init
+document.getElementById('addPoolForm').onsubmit = e => {
+  e.preventDefault();
+  showMsg("Adding to pool...", "info");
+  fetch('/mode/pool/add', {method:'POST', body:new FormData(e.target)})
+    .then(()=>{
+      showMsg("Done.", "success");
+      loadPool();
+    });
+};
+
+document.getElementById('setPool').onclick = () => {
+  showMsg("Setting pool mode...", "info");
+  fetch('/mode/pool/set', {method:'POST'})
+    .then(()=>{
+      showMsg("Rendering...", "info");
+      pollPreview();
+    });
+};
+
+document.getElementById('setDither').onclick = () => {
+  const alg = document.getElementById('ditherSelect').value;
+  showMsg("Applying dithering...", "info");
+  fetch('/mode/dither/set', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({algorithm: alg})
+  }).then(()=>{
+    showMsg("Rendering...", "info");
+    pollPreview();
+  });
+};
+
+document.getElementById('setArt').onclick = () => {
+  showMsg("Art mode...", "info");
+  fetch('/mode/art/set', {method:'POST'}).then(()=>{
+    showMsg("Done (no image).", "warning");
+  });
+};
+
+document.getElementById('rotateBtn').onclick = () => {
+  showMsg("Rotating...", "info");
+  fetch('/rotate', {method:'GET'}).then(()=>{
+    showMsg("Rendering...", "info");
+    pollPreview();
+  });
+};
+
+// Initialize
 loadPool();
-poll();
+pollPreview();
 </script>
-</body></html>
+</body>
+</html>
 """
 
 # ==== Flask Endpoints ====
+
+app = Flask(__name__)
 
 @app.route('/', methods=['GET'])
 def index():
@@ -402,7 +435,8 @@ def preview():
 @app.route('/mode/single', methods=['POST'])
 def set_single():
     f = request.files.get('image')
-    if not f: return jsonify(error="No file"),400
+    if not f:
+        return jsonify(error="No file"), 400
     fn = secure_filename(f.filename)
     # clear old single image
     for e in os.listdir(single_dir):
@@ -439,13 +473,14 @@ def pool_remove():
         config['pool_images'].remove(fn)
         save_config()
         p = os.path.join(pool_dir, fn)
-        if os.path.exists(p): os.remove(p)
+        if os.path.exists(p):
+            os.remove(p)
     return jsonify(success=True)
 
 @app.route('/mode/pool/set', methods=['POST'])
 def set_pool_mode():
     if not config['pool_images']:
-        return jsonify(error="No images"),400
+        return jsonify(error="No images in pool"), 400
     config['mode'] = 'pool'
     save_config()
     fn = random.choice(config['pool_images'])
@@ -466,25 +501,26 @@ def set_dither():
     if alg in ("floyd-steinberg","atkinson","shiau-fan-2","jarvis-judice-ninke","stucki","burkes"):
         config['dithering'] = alg
         save_config()
+        # re-render current image
         if current_image is not None:
             threading.Thread(target=lambda: update_epaper(current_image), daemon=True).start()
         return jsonify(success=True)
-    return jsonify(error="Invalid algorithm"),400
+    return jsonify(error="Invalid algorithm"), 400
 
 @app.route('/rotate', methods=['GET'])
 def rotate():
     global rendering_complete
     if current_image is None:
-        return jsonify(error="No image"),400
+        return jsonify(error="No image to rotate"), 400
     try:
-        res = getattr(Image.Resampling,"LANCZOS",Image.LANCZOS)
+        res = getattr(Image.Resampling, "LANCZOS", Image.LANCZOS)
         rot = current_image.rotate(90, expand=True)
         rot = ImageOps.fit(rot, get_target_size(), method=res)
         rendering_complete = False
         threading.Thread(target=lambda: update_epaper(rot), daemon=True).start()
         return jsonify(success=True)
     except Exception as e:
-        return jsonify(error=str(e)),500
+        return jsonify(error=str(e)), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=80)
