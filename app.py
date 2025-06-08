@@ -543,7 +543,7 @@ def rotate():
         rot = current_image.rotate(90, expand=True)
         rot = ImageOps.fit(rot, get_target_size(), method=res)
         rendering_complete = False
-        threading.Thread(target=lambda: update_epaper(rot), daemon=True).start()
+        threading.Thread(target=lambda: update_epaper_thread(rot), daemon=True).start()
         return jsonify(success=True)
     except Exception as e:
         return jsonify(error=str(e)), 500
