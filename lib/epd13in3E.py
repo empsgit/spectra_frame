@@ -291,7 +291,7 @@ class EPD():
         self.SendData(0XA5)
         self.CS_ALL(1)
 
-        epdconfig.delay_ms(200)
+        epdconfig.delay_ms(2000)
         epdconfig.module_exit()
 ### END OF FILE ###
 
