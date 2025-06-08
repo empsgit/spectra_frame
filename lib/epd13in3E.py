@@ -83,11 +83,19 @@ class EPD():
     def SendData2(self, buf, Len):
         epdconfig.spi_writebyte2(buf, Len)
 
-    def ReadBusyH(self):
-        print("e-Paper busy H")
-        while(epdconfig.digital_read(self.EPD_BUSY_PIN) == 0):      # 0: busy, 1: idle
-            epdconfig.delay_ms(5)
-        print("e-Paper busy H release")
+    def ReadBusyH(self, timeout_s=60):
+    """
+    Wait for BUSY_PIN to go idle, but sleep in small steps so
+    other Python threads can run. Supports a timeout.
+    """
+    print("e-Paper busy H")
+    start = time.time()
+    while epdconfig.digital_read(self.EPD_BUSY_PIN) == 0:  # 0: busy, 1: idle
+        if time.time() - start > timeout_s:
+            print("ReadBusyH() timeout after", timeout_s, "seconds")
+            break
+        time.sleep(0.01)   # yield the GIL for 10 ms
+    print("e-Paper busy H release")
 
     def TurnOnDisplay(self):
         print("Write PON")
