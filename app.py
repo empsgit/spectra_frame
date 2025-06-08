@@ -62,9 +62,13 @@ def get_target_size():
 
 # prepare palette
 _custom_palette = [
-    255,0,0,0,255,0,0,0,255,
-    255,255,0,0,0,0,255,255,255
-] + [0]*(768-18)
+    255,0,0,    # red
+    0,255,0,    # green
+    0,0,255,    # blue
+    255,255,0,  # yellow
+    0,0,0,      # black
+    255,255,255 # white
+] + [0] * (768 - 6*3)
 _palette_img = Image.new("P",(1,1))
 _palette_img.putpalette(_custom_palette)
 
@@ -253,7 +257,7 @@ def watchdog():
     while True:
         time.sleep(60)
         if time.time()-last_activity>TIMEOUT:
-            os.system("sudo shutdown now")
+            os.system("sudo restart now")
             break
 
 threading.Thread(target=watchdog, daemon=True).start()
@@ -330,6 +334,11 @@ INDEX_HTML = """
     <h3>Art of the Day</h3>
     <button id="setArt" class="btn btn-primary">Set Art Mode</button>
     <p class="text-muted">(Not implemented)</p>
+  </div>
+
+  <div class="section">
+    <h3>Clear Screen</h3>
+    <button id="clearBtn" class="btn btn-danger">Clear E-Paper</button>
   </div>
 
   <div class="section">
@@ -422,6 +431,12 @@ document.getElementById('setDither').onclick = () => {
   });
 };
 
+document.getElementById('clearBtn').onclick = () => {
+  showMsg("Clearing screen...", "info");
+  fetch('/clear', {method:'POST'})
+    .then(()=> showMsg("Screen cleared", "success"));
+};
+
 document.getElementById('setArt').onclick = () => {
   showMsg("Art mode...", "info");
   fetch('/mode/art/set', {method:'POST'}).then(()=>{
@@ -472,7 +487,7 @@ def set_single():
     config['mode']         = 'single'
     config['single_image'] = fn
     save_config()
-    threading.Thread(target=lambda: update_epaper(process_image(path)), daemon=True).start()
+    threading.Thread(target=lambda: update_epaper_thread(process_image(path)), daemon=True).start()
     return jsonify(success=True)
 
 @app.route('/mode/pool/add', methods=['POST'])
@@ -511,7 +526,7 @@ def set_pool_mode():
     save_config()
     fn = random.choice(config['pool_images'])
     path = os.path.join(pool_dir, fn)
-    threading.Thread(target=lambda: update_epaper(process_image(path)), daemon=True).start()
+    threading.Thread(target=lambda: update_epaper_thread(process_image(path)), daemon=True).start()
     return jsonify(success=True)
 
 @app.route('/mode/art/set', methods=['POST'])
@@ -529,7 +544,7 @@ def set_dither():
         save_config()
         # re-render current image
         if current_image is not None:
-            threading.Thread(target=lambda: update_epaper(current_image), daemon=True).start()
+            threading.Thread(target=lambda: update_epaper_thread(current_image), daemon=True).start()
         return jsonify(success=True)
     return jsonify(error="Invalid algorithm"), 400
 
@@ -547,6 +562,12 @@ def rotate():
         return jsonify(success=True)
     except Exception as e:
         return jsonify(error=str(e)), 500
+
+@app.route('/clear', methods=['POST'])
+def clear_endpoint():
+    clear_screen()
+    return jsonify(success=True)
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=80)
