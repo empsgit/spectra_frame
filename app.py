@@ -84,8 +84,8 @@ def apply_dithering(image, algorithm):
         return atkinson_dither(image)
     if algorithm == "shiau-fan-2":
         return shiaufan2_dither(image)
-    if algorithm == "jarvis-judice-ninke":
-        return jarvis_judice_ninke_dither(image)
+#    if algorithm == "jarvis-judice-ninke":
+#        return jarvis_judice_ninke_dither(image)
     if algorithm == "stucki":
         return stucki_dither(image)
     if algorithm == "burkes":
@@ -150,13 +150,13 @@ def shiaufan2_dither(image):
     ]
     return error_diffusion(image, kernel, divisor=42, anchor=(0,0))
 
-def jarvis_judice_ninke_dither(image):
-    kernel = [
-        [0,0,   7,   5,   3],
-        [3,5,   7,   5,   3],
-        [1,3,   5,   3,   1]
-    ]
-    return error_diffusion(image, kernel, divisor=48, anchor=(2,0))
+#def jarvis_judice_ninke_dither(image):
+#    kernel = [
+#        [0,0,   7,   5,   3],
+#        [3,5,   7,   5,   3],
+#        [1,3,   5,   3,   1]
+#    ]
+#    return error_diffusion(image, kernel, divisor=48, anchor=(2,0))
 
 def stucki_dither(image):
     kernel = [
@@ -173,8 +173,6 @@ def burkes_dither(image):
     ]
     return error_diffusion(image, kernel, divisor=32, anchor=(2,0))
 
-# ==== Image Processing & Display ====
-
 # ==== Image process & display ====
 update_counter = 0
 counter_lock = threading.Lock()
@@ -186,7 +184,7 @@ def display_image(image):
         count = update_counter
 
     # On every 10th update, do a full clear first
-    if count % 10 == 0:
+    if count % 5 == 0:
         epd.Init()
         epd.Clear()
         epd.sleep()
@@ -200,6 +198,14 @@ def display_image(image):
     epd.sleep()
 
     return dithered
+
+def clear_screen():
+    """Force a full clear + sleep in a background thread."""
+    def _clear():
+        epd.Init()
+        epd.Clear()
+        epd.sleep()
+    threading.Thread(target=_clear, daemon=True).start()
 
 def process_image(path_or_file):
     img = Image.open(path_or_file).convert("RGB")
@@ -261,27 +267,6 @@ def watchdog():
             break
 
 threading.Thread(target=watchdog, daemon=True).start()
-
-# ==== Flask App & Inactivity Monitor ====
-
-app = Flask(__name__)
-last_activity = time.time()
-TIMEOUT       = 20 * 60  # 20 minutes
-
-@app.before_request
-def touch_activity():
-    global last_activity
-    last_activity = time.time()
-
-def inactivity_watchdog():
-    while True:
-        time.sleep(60)
-        if time.time() - last_activity > TIMEOUT:
-            print("No activity for 20 minutes; shutting down.")
-            os.system("sudo shutdown now")
-            break
-
-threading.Thread(target=inactivity_watchdog, daemon=True).start()
 
 # ==== Web UI Template ====
 
