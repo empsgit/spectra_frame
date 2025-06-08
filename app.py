@@ -8,7 +8,13 @@ import io
 import base64
 import json
 import random
-
+import os
+picdir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'pic')
+libdir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'lib')
+print(libdir)
+if os.path.exists(libdir):
+    sys.path.append(libdir)
+    
 from flask import Flask, request, render_template_string, jsonify
 from werkzeug.utils import secure_filename
 from PIL import Image, ImageOps, ImageEnhance
