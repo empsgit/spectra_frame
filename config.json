@@ -3,5 +3,6 @@
   "single_image": "",
   "pool_images": [],
   "dithering": "floyd-steinberg",
-  "update_count": 0
+  "update_count": 0,
+  "fit_mode":      "pad" 
 }

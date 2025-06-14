@@ -33,7 +33,8 @@ default_config = {
     "mode":          "single",
     "single_image":  "",
     "pool_images":   [],
-    "dithering":     "floyd-steinberg"
+    "dithering":     "floyd-steinberg",
+    "fit_mode":      "pad"  # pad | zoom | stretch
 }
 
 def load_config():
@@ -215,7 +216,20 @@ def process_image(path_or_file):
     if img.height > img.width:
         img = img.rotate(90, expand=True)
     img = img.rotate(180, expand=True)
-    img = img.resize(get_target_size(), Image.Resampling.LANCZOS)
+
+    target_size = get_target_size()
+    fit_mode = config.get('fit_mode', 'pad')
+
+    if fit_mode == "stretch":
+        img = img.resize(target_size, Image.Resampling.LANCZOS)
+    elif fit_mode == "zoom":
+        img = ImageOps.fit(img, target_size, method=Image.Resampling.LANCZOS)
+    elif fit_mode == "pad":
+        img.thumbnail(target_size, Image.Resampling.LANCZOS)
+        bg = Image.new("RGB", target_size, (255,255,255))
+        bg.paste(img, ((target_size[0] - img.width)//2, (target_size[1] - img.height)//2))
+        img = bg
+
     img = ImageOps.autocontrast(img)
     img = ImageEnhance.Color(img).enhance(3.0)
     return img
@@ -303,7 +317,15 @@ INDEX_HTML = """
     <h5 class="mt-3">Current Pool</h5>
     <ul id="poolList"></ul>
   </div>
-
+  <div class="section">
+    <h3>Image Fit Mode</h3>
+      <select id="fitModeSelect" class="form-control" style="max-width:300px;">
+        <option value="pad">Pad with White Borders</option>
+        <option value="zoom">Zoom to Fill</option>
+        <option value="stretch">Stretch</option>
+      </select>
+    <button id="setFitMode" class="btn btn-primary mt-2">Apply & Refresh</button>
+  </div>
   <div class="section">
     <h3>Dithering Algorithm</h3>
     <select id="ditherSelect" class="form-control" style="max-width:300px;">
@@ -339,20 +361,43 @@ INDEX_HTML = """
     <pre id="configDisplay" class="bg-light p-3"></pre>
   </div>
 <script>
+
+document.getElementById('setFitMode').onclick = () => {
+  const mode = document.getElementById('fitModeSelect').value;
+  showMsg("Applying fit mode...", "info");
+  fetch('/mode/fit/set', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({fit_mode: mode})
+  }).then(()=>{
+    showMsg("Rendering...", "info");
+    loadConfig();
+  });
+};
+
 function showMsg(txt, cls="info") {
   document.getElementById('msg').innerHTML = `<div class="alert alert-${cls}">${txt}</div>`;
 }
 
   function loadConfig(){
-    fetch('/config').then(r=>r.json()).then(c=>{
-      document.getElementById('configDisplay').innerText =
-        JSON.stringify(c, null, 2);
-    });
-    fetch('/pool/list').then(r=>r.json()).then(p=>{
-      let ul = document.getElementById('poolList');
-      ul.innerHTML = p.map(i=>`<li>${i}</li>`).join('');
-    });
-  }
+  fetch('/config').then(r=>r.json()).then(c=>{
+    document.getElementById('configDisplay').innerText =
+      JSON.stringify(c, null, 2);
+
+    // Sync dropdowns to config values
+    if (c.fit_mode) {
+      document.getElementById('fitModeSelect').value = c.fit_mode;
+    }
+    if (c.dithering) {
+      document.getElementById('ditherSelect').value = c.dithering;
+    }
+  });
+
+  fetch('/pool/list').then(r=>r.json()).then(p=>{
+    let ul = document.getElementById('poolList');
+    ul.innerHTML = p.map(i=>`<li>${i}</li>`).join('');
+  });
+}
 
 function loadPool() {
   fetch('/pool/list').then(r=>r.json()).then(arr=>{
@@ -524,6 +569,18 @@ def set_art_mode():
     config['mode'] = 'art'
     save_config()
     return jsonify(success=True)
+
+@app.route('/mode/fit/set', methods=['POST'])
+def set_fit_mode():
+    data = request.get_json() or {}
+    mode = data.get('fit_mode')
+    if mode in ("pad", "zoom", "stretch"):
+        config['fit_mode'] = mode
+        save_config()
+        if current_image is not None:
+            threading.Thread(target=lambda: update_epaper_thread(current_image), daemon=True).start()
+        return jsonify(success=True)
+    return jsonify(error="Invalid fit mode"), 400
 
 @app.route('/mode/dither/set', methods=['POST'])
 def set_dither():
