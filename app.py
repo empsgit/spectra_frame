@@ -88,7 +88,7 @@ def apply_dithering(image, algorithm):
     if algorithm == "floyd-steinberg":
         return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
     if algorithm == "atkinson":
-        return atkinson_dither(image, _palette_img)
+        return atkinson_dither(image)
     if algorithm == "shiau-fan-2":
         return shiaufan2_dither(image)
 #    if algorithm == "jarvis-judice-ninke":
@@ -100,37 +100,27 @@ def apply_dithering(image, algorithm):
     # fallback
     return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
 
-@jit("f4[:,:,:](f4[:,:,:])", nopython=True, nogil=True)
-def atkinson_dither_numba(image):
-    frac = 8.0
-    Lx, Ly, Lc = image.shape
-    for j in range(Ly):
-        for i in range(Lx):
-            for c in range(Lc):
-                old_val = image[i, j, c]
-                new_val = round(old_val)
-                err = old_val - new_val
-                image[i, j, c] = new_val
-                if i < Lx - 1:
-                    image[i + 1, j, c] += err / frac
-                if i < Lx - 2:
-                    image[i + 2, j, c] += err / frac
-                if j < Ly - 1:
-                    image[i, j + 1, c] += err / frac
-                    if i > 0:
-                        image[i - 1, j + 1, c] += err / frac
-                    if i < Lx - 1:
-                        image[i + 1, j + 1, c] += err / frac
-                if j < Ly - 2:
-                    image[i, j + 2, c] += err / frac
-    return image
-
-def atkinson_dither(image_pil, _palette_img):
-    img = image_pil.convert("RGB")
-    img_np = np.asarray(img).astype(np.float32) / 255.0
-    dithered = atkinson_dither_numba(img_np.copy()) * 255.0
-    dithered_img = Image.fromarray(np.clip(dithered, 0, 255).astype(np.uint8))
-    return dithered_img.convert("P", palette=_palette_img, dither=Image.NONE)
+def atkinson_dither(image):
+    img = image.convert("RGB")
+    pixels = img.load()
+    w, h = img.size
+    palette = [(255,0,0),(0,255,0),(0,0,255),(255,255,0),(0,0,0),(255,255,255)]
+    for y in range(h):
+        for x in range(w):
+            old = pixels[x,y]
+            new = min(palette, key=lambda c: sum((old[i]-c[i])**2 for i in range(3)))
+            pixels[x,y] = new
+            err = tuple(old[i]-new[i] for i in range(3))
+            for dx,dy in [(1,0),(2,0),(-1,1),(0,1),(1,1),(0,2)]:
+                nx, ny = x+dx, y+dy
+                if 0 <= nx < w and 0 <= ny < h:
+                    r,g,b = pixels[nx,ny]
+                    pixels[nx,ny] = (
+                        max(0, min(255, r + err[0]//8)),
+                        max(0, min(255, g + err[1]//8)),
+                        max(0, min(255, b + err[2]//8))
+                    )
+    return img.convert("P", palette=_palette_img, dither=Image.NONE)
 
 def error_diffusion(image, kernel, divisor, anchor):
     img = image.convert("RGB")
