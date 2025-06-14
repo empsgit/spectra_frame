@@ -502,15 +502,18 @@ def rotate():
     except Exception as e:
         return jsonify(error=str(e)), 500
 
-@app.route('/clear', methods=['POST'])
-def clear_endpoint():
-    clear_screen()
-    return jsonify(success=True)
-
 @app.route('/config', methods=['GET'])
 def get_config():
     # return the live config object
     return jsonify(config)
+
+@app.route('/clear', methods=['POST'])
+def clear_endpoint():
+    threading.Thread(target=lambda: (epd.Init(), epd.Clear(), epd.sleep()),
+                     daemon=True).start()
+    return jsonify(success=True)
+
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=80)
