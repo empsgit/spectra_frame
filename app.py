@@ -8,7 +8,7 @@ import io
 import base64
 import json
 import random
-from numba import njit
+from numba import jit
 import numpy as np
 from PIL import Image
 
