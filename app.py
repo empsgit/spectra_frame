@@ -79,8 +79,6 @@ _custom_palette = [
 _palette_img = Image.new("P",(1,1))
 _palette_img.putpalette(_custom_palette)
 
-
-
 # ==== Dithering Algorithms ====
 
 def apply_dithering(image, algorithm):
@@ -102,59 +100,37 @@ def apply_dithering(image, algorithm):
     # fallback
     return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
 
-def atkinson_dither(image):
-    return atkinson_dither_optimized(image)
-@njit
-def find_closest_color(color, palette):
-    min_dist = 1e10
-    best_idx = 0
-    for i in range(palette.shape[0]):
-        dist = 0
-        for j in range(3):
-            diff = int(color[j]) - int(palette[i][j])
-            dist += diff * diff
-        if dist < min_dist:
-            min_dist = dist
-            best_idx = i
-    return best_idx
+@jit("f4[:,:,:](f4[:,:,:])", nopython=True, nogil=True)
+def atkinson_dither_numba(image):
+    frac = 8.0
+    Lx, Ly, Lc = image.shape
+    for j in range(Ly):
+        for i in range(Lx):
+            for c in range(Lc):
+                old_val = image[i, j, c]
+                new_val = round(old_val)
+                err = old_val - new_val
+                image[i, j, c] = new_val
+                if i < Lx - 1:
+                    image[i + 1, j, c] += err / frac
+                if i < Lx - 2:
+                    image[i + 2, j, c] += err / frac
+                if j < Ly - 1:
+                    image[i, j + 1, c] += err / frac
+                    if i > 0:
+                        image[i - 1, j + 1, c] += err / frac
+                    if i < Lx - 1:
+                        image[i + 1, j + 1, c] += err / frac
+                if j < Ly - 2:
+                    image[i, j + 2, c] += err / frac
+    return image
 
-@njit
-def atkinson_dither_array(image_arr, palette):
-    height, width, _ = image_arr.shape
-    result = np.copy(image_arr)
-    for y in range(height):
-        for x in range(width):
-            old_pixel = result[y, x]
-            closest_idx = find_closest_color(old_pixel, palette)
-            new_pixel = palette[closest_idx]
-            result[y, x] = new_pixel
-            error = (old_pixel - new_pixel) // 8
-
-            for dx, dy in [(1,0), (2,0), (-1,1), (0,1), (1,1), (0,2)]:
-                nx = x + dx
-                ny = y + dy
-                if 0 <= nx < width and 0 <= ny < height:
-                    result[ny, nx] = np.clip(result[ny, nx] + error, 0, 255)
-    return result
-
-def atkinson_dither_optimized(image):
-    palette = np.array([
-        [255, 0, 0],
-        [0, 255, 0],
-        [0, 0, 255],
-        [255, 255, 0],
-        [0, 0, 0],
-        [255, 255, 255]
-    ], dtype=np.uint8)
-
-    img = image.convert("RGB")
-    arr = np.array(img, dtype=np.uint8)
-    dithered_arr = atkinson_dither_array(arr, palette)
-    dithered_img = Image.fromarray(dithered_arr.astype(np.uint8), "RGB")
-    return dithered_img.convert("P", palette=_palette_img, dither=Image.NONE)
-
-
-
+def atkinson_dither(image_pil, palette_image):
+    img = image_pil.convert("RGB")
+    img_np = np.asarray(img).astype(np.float32) / 255.0
+    dithered = atkinson_dither_numba(img_np.copy()) * 255.0
+    dithered_img = Image.fromarray(np.clip(dithered, 0, 255).astype(np.uint8))
+    return dithered_img.convert("P", palette=palette_image, dither=Image.NONE)
 
 def error_diffusion(image, kernel, divisor, anchor):
     img = image.convert("RGB")
