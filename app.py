@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import sys
 import os
 import time
@@ -52,7 +54,7 @@ config = load_config()
 epd = epd13in3E.EPD()
 try:
     epd.Init()
-    epd.Clear()
+#    epd.Clear()
     epd.sleep()
 except Exception as e:
     print("EPD init error:", e)
@@ -339,18 +341,6 @@ INDEX_HTML = """
 <script>
 function showMsg(txt, cls="info") {
   document.getElementById('msg').innerHTML = `<div class="alert alert-${cls}">${txt}</div>`;
-}
-
-function pollPreview() {
-  fetch('/preview').then(r=>r.json()).then(d=>{
-    if (d.success) {
-      document.getElementById('preview').src = "data:image/png;base64," + d.rendered_image;
-      showMsg("Done!", "success");
-    } else {
-      showMsg("Rendering...", "info");
-      setTimeout(pollPreview, 2000);
-    }
-  });
 }
 
   function loadConfig(){
