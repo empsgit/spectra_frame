@@ -443,7 +443,7 @@ document.getElementById('rotateBtn').onclick = () => {
 
 // Initialize
 loadPool();
-pollPreview();
+//pollPreview();
 loadConfig();
 </script>
 </body>
