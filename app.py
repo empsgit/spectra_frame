@@ -331,7 +331,7 @@ INDEX_HTML = """
         <option value="zoom">Zoom to Fill</option>
         <option value="stretch">Stretch</option>
       </select>
-    <button id="fitModeSelect" class="btn btn-primary mt-2">Apply & Refresh</button>
+    <button id="setFitMode" class="btn btn-primary mt-2">Apply & Refresh</button>
   </div>
   <div class="section">
     <h3>Dithering Algorithm</h3>
@@ -369,7 +369,7 @@ INDEX_HTML = """
   </div>
 <script>
 
-document.getElementById('fitModeSelect').onclick = () => {
+document.getElementById('setFitMode').onclick = () => {
   const mode = document.getElementById('fitModeSelect').value;
   showMsg("Applying fit mode...", "info");
   fetch('/mode/fit/set', {
