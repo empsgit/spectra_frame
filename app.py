@@ -8,10 +8,6 @@ import io
 import base64
 import json
 import random
-from numba import njit
-import numpy as np
-from PIL import Image
-
 
 from flask import Flask, request, render_template_string, jsonify
 from werkzeug.utils import secure_filename
