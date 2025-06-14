@@ -393,7 +393,7 @@ function showMsg(txt, cls="info") {
 
     // Sync dropdowns to config values
     if (c.fit_mode) {
-      document.getElementById('fitModeSelect').value = c.fit_mode;
+      document.getElementById('fitMode').value = c.fit_mode;
     }
     if (c.dithering) {
       document.getElementById('ditherSelect').value = c.dithering;
