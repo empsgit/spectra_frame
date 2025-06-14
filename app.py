@@ -88,7 +88,7 @@ def apply_dithering(image, algorithm):
     if algorithm == "floyd-steinberg":
         return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
     if algorithm == "atkinson":
-        return atkinson_dither(image)
+        return atkinson_dither(image, _palette_img)
     if algorithm == "shiau-fan-2":
         return shiaufan2_dither(image)
 #    if algorithm == "jarvis-judice-ninke":
@@ -125,7 +125,7 @@ def atkinson_dither_numba(image):
                     image[i, j + 2, c] += err / frac
     return image
 
-def atkinson_dither(image_pil, palette_image):
+def atkinson_dither(image_pil, _palette_img):
     img = image_pil.convert("RGB")
     img_np = np.asarray(img).astype(np.float32) / 255.0
     dithered = atkinson_dither_numba(img_np.copy()) * 255.0
