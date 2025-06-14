@@ -8,7 +8,9 @@ import io
 import base64
 import json
 import random
+from numba import njit
 import numpy as np
+from PIL import Image
 
 
 from flask import Flask, request, render_template_string, jsonify
@@ -77,6 +79,8 @@ _custom_palette = [
 _palette_img = Image.new("P",(1,1))
 _palette_img.putpalette(_custom_palette)
 
+
+
 # ==== Dithering Algorithms ====
 
 def apply_dithering(image, algorithm):
@@ -99,37 +103,58 @@ def apply_dithering(image, algorithm):
     return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
 
 def atkinson_dither(image):
-    img = image.convert("RGB")
-    arr = np.array(img, dtype=np.int32)
-    height, width, _ = arr.shape
+    return atkinson_dither_optimized(image)
+@njit
+def find_closest_color(color, palette):
+    min_dist = 1e10
+    best_idx = 0
+    for i in range(palette.shape[0]):
+        dist = 0
+        for j in range(3):
+            diff = int(color[j]) - int(palette[i][j])
+            dist += diff * diff
+        if dist < min_dist:
+            min_dist = dist
+            best_idx = i
+    return best_idx
 
-    palette = np.array([
-        (255, 0, 0),     # red
-        (0, 255, 0),     # green
-        (0, 0, 255),     # blue
-        (255, 255, 0),   # yellow
-        (0, 0, 0),       # black
-        (255, 255, 255)  # white
-    ], dtype=np.int32)
-
-    def find_closest(color):
-        d = palette - color
-        return palette[np.argmin(np.sum(d ** 2, axis=1))]
-
+@njit
+def atkinson_dither_array(image_arr, palette):
+    height, width, _ = image_arr.shape
+    result = np.copy(image_arr)
     for y in range(height):
         for x in range(width):
-            old = arr[y, x]
-            new = find_closest(old)
-            arr[y, x] = new
-            error = (old - new) // 8
+            old_pixel = result[y, x]
+            closest_idx = find_closest_color(old_pixel, palette)
+            new_pixel = palette[closest_idx]
+            result[y, x] = new_pixel
+            error = (old_pixel - new_pixel) // 8
 
-            for dx, dy in [(1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2)]:
-                nx, ny = x + dx, y + dy
+            for dx, dy in [(1,0), (2,0), (-1,1), (0,1), (1,1), (0,2)]:
+                nx = x + dx
+                ny = y + dy
                 if 0 <= nx < width and 0 <= ny < height:
-                    arr[ny, nx] = np.clip(arr[ny, nx] + error, 0, 255)
+                    result[ny, nx] = np.clip(result[ny, nx] + error, 0, 255)
+    return result
 
-    result = Image.fromarray(arr.astype(np.uint8), mode='RGB')
-    return result.convert("P", palette=_palette_img, dither=Image.NONE)
+def atkinson_dither_optimized(image):
+    palette = np.array([
+        [255, 0, 0],
+        [0, 255, 0],
+        [0, 0, 255],
+        [255, 255, 0],
+        [0, 0, 0],
+        [255, 255, 255]
+    ], dtype=np.uint8)
+
+    img = image.convert("RGB")
+    arr = np.array(img, dtype=np.uint8)
+    dithered_arr = atkinson_dither_array(arr, palette)
+    dithered_img = Image.fromarray(dithered_arr.astype(np.uint8), "RGB")
+    return dithered_img.convert("P", palette=_palette_img, dither=Image.NONE)
+
+
+
 
 def error_diffusion(image, kernel, divisor, anchor):
     img = image.convert("RGB")
