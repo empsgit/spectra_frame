@@ -8,6 +8,8 @@ import io
 import base64
 import json
 import random
+import numpy as np
+
 
 from flask import Flask, request, render_template_string, jsonify
 from werkzeug.utils import secure_filename
@@ -76,6 +78,43 @@ _palette_img = Image.new("P",(1,1))
 _palette_img.putpalette(_custom_palette)
 
 # ==== Dithering Algorithms ====
+def atkinson_dither_fast(image):
+    img = image.convert("RGB")
+    arr = np.array(img, dtype=np.uint8)
+    h, w, _ = arr.shape
+    arr = arr.astype(np.int32)
+
+    palette = np.array([
+        [255,0,0],    # red
+        [0,255,0],    # green
+        [0,0,255],    # blue
+        [255,255,0],  # yellow
+        [0,0,0],      # black
+        [255,255,255] # white
+    ])
+
+    def find_closest(color):
+        diff = palette - color
+        dist = np.sum(diff**2, axis=1)
+        return palette[np.argmin(dist)]
+
+    for y in range(h):
+        for x in range(w):
+            old_pixel = arr[y, x]
+            new_pixel = find_closest(old_pixel)
+            arr[y, x] = new_pixel
+            error = (old_pixel - new_pixel) // 8
+            for dx, dy in [(1,0),(2,0),(-1,1),(0,1),(1,1),(0,2)]:
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < w and 0 <= ny < h:
+                    arr[ny, nx] = np.clip(arr[ny, nx] + error, 0, 255)
+
+    dithered_img = Image.fromarray(arr.astype(np.uint8), "RGB")
+    return dithered_img.convert("P", palette=_palette_img, dither=Image.NONE)
+
+
+
+
 
 def apply_dithering(image, algorithm):
     """
@@ -84,7 +123,7 @@ def apply_dithering(image, algorithm):
     if algorithm == "floyd-steinberg":
         return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
     if algorithm == "atkinson":
-        return atkinson_dither(image)
+        return atkinson_dither_fast(image)
     if algorithm == "shiau-fan-2":
         return shiaufan2_dither(image)
 #    if algorithm == "jarvis-judice-ninke":
