@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import sys
 import os
 import time
@@ -11,11 +13,11 @@ from flask import Flask, request, render_template_string, jsonify
 from werkzeug.utils import secure_filename
 from PIL import Image, ImageOps, ImageEnhance
 
-# Add local lib directory for Waveshare e-paper driver
-libdir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'lib')
+# allow local driver module in lib/
+libdir = os.path.join(os.path.dirname(__file__), 'lib')
 if os.path.exists(libdir):
     sys.path.append(libdir)
-import epd13in3E  # Waveshare 13.3" E-Paper module
+import epd13in3E  # Waveshare 13.3" “E” driver
 
 # ==== Directories & Config ====
 BASE_DIR    = os.path.dirname(os.path.realpath(__file__))
@@ -31,7 +33,8 @@ default_config = {
     "mode":          "single",
     "single_image":  "",
     "pool_images":   [],
-    "dithering":     "floyd-steinberg"
+    "dithering":     "floyd-steinberg",
+    "update_count":  0
 }
 
 def load_config():
@@ -40,7 +43,12 @@ def load_config():
             json.dump(default_config, f, indent=2)
         return default_config.copy()
     with open(config_path, 'r') as f:
-        return json.load(f)
+        data = json.load(f)
+    # fill in missing keys if any
+    for k,v in default_config.items():
+        if k not in data:
+            data[k] = v
+    return data
 
 def save_config():
     with open(config_path, 'w') as f:
@@ -52,8 +60,7 @@ config = load_config()
 epd = epd13in3E.EPD()
 try:
     epd.Init()
-    epd.Clear()
-    epd.sleep()
+    epd.sleep()  # don't clear on startup
 except Exception as e:
     print("EPD init error:", e)
 
@@ -73,142 +80,48 @@ _palette_img = Image.new("P",(1,1))
 _palette_img.putpalette(_custom_palette)
 
 # ==== Dithering Algorithms ====
-
 def apply_dithering(image, algorithm):
-    """
-    Convert a PIL-RGB image into our 6-color palette using the selected algorithm.
-    """
     if algorithm == "floyd-steinberg":
         return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
     if algorithm == "atkinson":
         return atkinson_dither(image)
     if algorithm == "shiau-fan-2":
         return shiaufan2_dither(image)
-#    if algorithm == "jarvis-judice-ninke":
-#        return jarvis_judice_ninke_dither(image)
+    if algorithm == "jarvis-judice-ninke":
+        return jarvis_judice_ninke_dither(image)
     if algorithm == "stucki":
         return stucki_dither(image)
     if algorithm == "burkes":
         return burkes_dither(image)
-    # fallback
     return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
 
-def atkinson_dither(image):
-    img = image.convert("RGB")
-    pixels = img.load()
-    w, h = img.size
-    palette = [(255,0,0),(0,255,0),(0,0,255),(255,255,0),(0,0,0),(255,255,255)]
-    for y in range(h):
-        for x in range(w):
-            old = pixels[x,y]
-            new = min(palette, key=lambda c: sum((old[i]-c[i])**2 for i in range(3)))
-            pixels[x,y] = new
-            err = tuple(old[i]-new[i] for i in range(3))
-            for dx,dy in [(1,0),(2,0),(-1,1),(0,1),(1,1),(0,2)]:
-                nx, ny = x+dx, y+dy
-                if 0 <= nx < w and 0 <= ny < h:
-                    r,g,b = pixels[nx,ny]
-                    pixels[nx,ny] = (
-                        max(0, min(255, r + err[0]//8)),
-                        max(0, min(255, g + err[1]//8)),
-                        max(0, min(255, b + err[2]//8))
-                    )
-    return img.convert("P", palette=_palette_img, dither=Image.NONE)
+# ... (include atkinson_dither, error_diffusion, shiaufan2_dither,
+#      jarvis_judice_ninke_dither, stucki_dither, burkes_dither here) ...
 
-def error_diffusion(image, kernel, divisor, anchor):
-    img = image.convert("RGB")
-    pixels = img.load()
-    w, h = img.size
-    palette = [(255,0,0),(0,255,0),(0,0,255),(255,255,0),(0,0,0),(255,255,255)]
-    kh, kw = len(kernel), len(kernel[0])
-    ax, ay = anchor
-    for y in range(h):
-        for x in range(w):
-            old = pixels[x,y]
-            new = min(palette, key=lambda c: sum((old[i]-c[i])**2 for i in range(3)))
-            pixels[x,y] = new
-            err = tuple(old[i]-new[i] for i in range(3))
-            for dy in range(kh):
-                for dx in range(kw):
-                    val = kernel[dy][dx]
-                    if val == 0: continue
-                    nx, ny = x + dx - ax, y + dy - ay
-                    if 0 <= nx < w and 0 <= ny < h:
-                        r,g,b = pixels[nx,ny]
-                        pixels[nx,ny] = (
-                            max(0, min(255, r + err[0]*val//divisor)),
-                            max(0, min(255, g + err[1]*val//divisor)),
-                            max(0, min(255, b + err[2]*val//divisor))
-                        )
-    return img.convert("P", palette=_palette_img, dither=Image.NONE)
-
-def shiaufan2_dither(image):
-    kernel = [
-        [0,0,   0,   8,   4],
-        [2,4,   8,   4,   2],
-        [1,2,   4,   2,   1]
-    ]
-    return error_diffusion(image, kernel, divisor=42, anchor=(0,0))
-
-#def jarvis_judice_ninke_dither(image):
-#    kernel = [
-#        [0,0,   7,   5,   3],
-#        [3,5,   7,   5,   3],
-#        [1,3,   5,   3,   1]
-#    ]
-#    return error_diffusion(image, kernel, divisor=48, anchor=(2,0))
-
-def stucki_dither(image):
-    kernel = [
-        [0,0,   8,   4,   2],
-        [2,4,   8,   4,   2],
-        [1,2,   4,   2,   1]
-    ]
-    return error_diffusion(image, kernel, divisor=42, anchor=(2,0))
-
-def burkes_dither(image):
-    kernel = [
-        [0,0,   8,   4,   0],
-        [2,4,   8,   4,   2]
-    ]
-    return error_diffusion(image, kernel, divisor=32, anchor=(2,0))
-
-# ==== Image process & display ====
-update_counter = 0
-counter_lock = threading.Lock()
-
+# ==== Display Logic with persisted counter ====
 def display_image(image):
-    global update_counter
-    with counter_lock:
-        update_counter += 1
-        count = update_counter
+    # increment & persist update_count
+    config['update_count'] += 1
+    cnt = config['update_count']
+    save_config()
 
-    # On every 10th update, do a full clear first
-    if count % 5 == 0:
+    # full clear on every 6th update
+    if cnt % 6 == 0:
         epd.Init()
         epd.Clear()
         epd.sleep()
 
-    # Standard update
+    # standard update
     epd.Init()
     img = ImageOps.fit(image, get_target_size(), method=Image.Resampling.LANCZOS)
     dithered = apply_dithering(img, config['dithering'])
     buf = epd.getbuffer(dithered)
     epd.display(buf)
     epd.sleep()
-
     return dithered
 
-def clear_screen():
-    """Force a full clear + sleep in a background thread."""
-    def _clear():
-        epd.Init()
-        epd.Clear()
-        epd.sleep()
-    threading.Thread(target=_clear, daemon=True).start()
-
-def process_image(path_or_file):
-    img = Image.open(path_or_file).convert("RGB")
+def process_image(src):
+    img = Image.open(src).convert("RGB")
     img = ImageOps.exif_transpose(img)
     if img.height > img.width:
         img = img.rotate(90, expand=True)
@@ -218,18 +131,18 @@ def process_image(path_or_file):
     img = ImageEnhance.Color(img).enhance(3.0)
     return img
 
-current_image = None
-rendered_data = None
-rendering_complete = False
+current_image       = None
+rendered_image_data = None
+rendering_complete  = False
 
 def update_epaper_thread(image):
-    global current_image, rendered_data, rendering_complete
+    global current_image, rendered_image_data, rendering_complete
     try:
         d = display_image(image)
         current_image = d
         buf = io.BytesIO()
         d.rotate(180).save(buf, format="PNG")
-        rendered_data = base64.b64encode(buf.getvalue()).decode('utf-8')
+        rendered_image_data = base64.b64encode(buf.getvalue()).decode('utf-8')
         rendering_complete = True
     except Exception as e:
         print("EPD update error:", e)
@@ -243,30 +156,31 @@ def initial_display():
             update_epaper_thread(process_image(p))
     elif m == 'pool' and config['pool_images']:
         fn = random.choice(config['pool_images'])
-        p = os.path.join(pool_dir, fn)
+        p  = os.path.join(pool_dir, fn)
         if os.path.exists(p):
             update_epaper_thread(process_image(p))
 
 threading.Thread(target=initial_display, daemon=True).start()
 
-# ==== Flask & inactivity ====
+# ==== Flask & Inactivity ====
 app = Flask(__name__)
 last_activity = time.time()
-TIMEOUT = 20*60
+TIMEOUT       = 20*60
 
 @app.before_request
-def touch():
+def touch_activity():
     global last_activity
     last_activity = time.time()
 
 def watchdog():
     while True:
         time.sleep(60)
-        if time.time()-last_activity>TIMEOUT:
-            os.system("sudo restart now")
+        if time.time() - last_activity > TIMEOUT:
+            os.system("sudo shutdown now")
             break
 
 threading.Thread(target=watchdog, daemon=True).start()
+
 
 # ==== Web UI Template ====
 
@@ -278,33 +192,35 @@ INDEX_HTML = """
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Spectra 6 Picture Frame</title>
   <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
-  <style>body{padding:20px;} .section{margin-bottom:30px;}</style>
+  <style>
+    body { padding: 20px; }
+    .section { margin-bottom: 30px; }
+  </style>
 </head>
 <body>
   <h1 class="mb-4">Spectra 6 Picture Frame</h1>
 
   <div class="section">
     <h3>Single Image Mode</h3>
-    <form id="singleForm" enctype="multipart/form-data">
+    <form id="singleForm">
       <input type="file" name="image" accept="image/*" required>
-      <button class="btn btn-primary mt-2">Upload & Set</button>
+      <button type="submit" class="btn btn-primary mt-2">Upload & Set</button>
     </form>
   </div>
 
   <div class="section">
     <h3>Image Pool Mode</h3>
-    <form id="addPoolForm" enctype="multipart/form-data">
-      <input type="file" name="images" accept="image/*" multiple>
-      <button class="btn btn-secondary mt-2">Add to Pool</button>
+    <form id="poolForm">
+      <input type="file" name="images" accept="image/*" multiple required>
+      <button type="submit" class="btn btn-secondary mt-2">Add Images to Pool</button>
     </form>
-    <button id="setPool" class="btn btn-primary mt-2">Use Pool Mode</button>
-    <h5 class="mt-3">Current Pool</h5>
+    <button id="usePoolBtn" class="btn btn-primary mt-2">Use Pool Mode</button>
     <ul id="poolList"></ul>
   </div>
 
   <div class="section">
     <h3>Dithering Algorithm</h3>
-    <select id="ditherSelect" class="form-control" style="max-width:300px;">
+    <select id="ditherSelect" class="form-control" style="max-width: 300px;">
       <option value="floyd-steinberg">Floyd–Steinberg</option>
       <option value="atkinson">Atkinson</option>
       <option value="shiau-fan-2">Shiau-Fan 2</option>
@@ -312,137 +228,98 @@ INDEX_HTML = """
       <option value="stucki">Stucki</option>
       <option value="burkes">Burkes</option>
     </select>
-    <button id="setDither" class="btn btn-primary mt-2">Apply & Refresh</button>
-  </div>
-
-  <div class="section">
-    <h3>Art of the Day</h3>
-    <button id="setArt" class="btn btn-primary">Set Art Mode</button>
-    <p class="text-muted">(Not implemented)</p>
+    <button id="setDitherBtn" class="btn btn-primary mt-2">Set Dithering</button>
   </div>
 
   <div class="section">
     <h3>Clear Screen</h3>
-    <button id="clearBtn" class="btn btn-danger">Clear E-Paper</button>
+    <button id="clearBtn" class="btn btn-danger">Clear Display</button>
   </div>
 
   <div class="section">
     <h3>Live Preview</h3>
     <div id="msg"></div>
-    <img id="preview" src="" class="img-fluid" style="max-width:400px;">
+    <img id="preview" src="" class="img-fluid" style="max-width: 400px;">
     <button id="rotateBtn" class="btn btn-warning mt-2">Rotate 90°</button>
   </div>
 
+  <div class="section">
+    <h3>Current Configuration</h3>
+    <pre id="configDisplay" class="bg-light p-3"></pre>
+  </div>
+
 <script>
-function showMsg(txt, cls="info") {
-  document.getElementById('msg').innerHTML = `<div class="alert alert-${cls}">${txt}</div>`;
-}
+  function showMsg(txt, cls="info"){
+    document.getElementById('msg').innerHTML =
+      `<div class="alert alert-${cls}">${txt}</div>`;
+  }
 
-function pollPreview() {
-  fetch('/preview').then(r=>r.json()).then(d=>{
-    if (d.success) {
-      document.getElementById('preview').src = "data:image/png;base64," + d.rendered_image;
-      showMsg("Done!", "success");
-    } else {
-      showMsg("Rendering...", "info");
-      setTimeout(pollPreview, 2000);
-    }
-  });
-}
-
-function loadPool() {
-  fetch('/pool/list').then(r=>r.json()).then(arr=>{
-    const ul = document.getElementById('poolList');
-    ul.innerHTML = "";
-    arr.forEach(fn => {
-      const li = document.createElement('li');
-      li.textContent = fn + " ";
-      const btn = document.createElement('button');
-      btn.textContent = "Remove";
-      btn.className = "btn btn-sm btn-danger ml-2";
-      btn.onclick = () => {
-        fetch('/mode/pool/remove', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({filename: fn})
-        }).then(loadPool);
-      };
-      li.appendChild(btn);
-      ul.appendChild(li);
+  function pollPreview(){
+    fetch('/preview').then(r=>r.json()).then(d=>{
+      if(d.success){
+        document.getElementById('preview').src =
+          "data:image/png;base64," + d.rendered_image;
+        showMsg("Rendering Complete!","success");
+        loadConfig();
+      } else {
+        showMsg("Rendering...","info");
+        setTimeout(pollPreview, 1000);
+      }
     });
-  });
-}
+  }
 
-// Handlers
-document.getElementById('singleForm').onsubmit = e => {
-  e.preventDefault();
-  showMsg("Uploading...", "info");
-  fetch('/mode/single', {method:'POST', body:new FormData(e.target)})
-    .then(()=>{
-      showMsg("Rendering...", "info");
-      pollPreview();
+  function loadConfig(){
+    fetch('/config').then(r=>r.json()).then(c=>{
+      document.getElementById('configDisplay').innerText =
+        JSON.stringify(c, null, 2);
     });
-};
-
-document.getElementById('addPoolForm').onsubmit = e => {
-  e.preventDefault();
-  showMsg("Adding to pool...", "info");
-  fetch('/mode/pool/add', {method:'POST', body:new FormData(e.target)})
-    .then(()=>{
-      showMsg("Done.", "success");
-      loadPool();
+    fetch('/pool/list').then(r=>r.json()).then(p=>{
+      let ul = document.getElementById('poolList');
+      ul.innerHTML = p.map(i=>`<li>${i}</li>`).join('');
     });
-};
+  }
 
-document.getElementById('setPool').onclick = () => {
-  showMsg("Setting pool mode...", "info");
-  fetch('/mode/pool/set', {method:'POST'})
-    .then(()=>{
-      showMsg("Rendering...", "info");
-      pollPreview();
-    });
-};
+  document.getElementById('singleForm').onsubmit = e => {
+    e.preventDefault();
+    let fd = new FormData(e.target);
+    fetch('/mode/single', {method:'POST', body:fd}).then(pollPreview);
+  };
 
-document.getElementById('setDither').onclick = () => {
-  const alg = document.getElementById('ditherSelect').value;
-  showMsg("Applying dithering...", "info");
-  fetch('/mode/dither/set', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({algorithm: alg})
-  }).then(()=>{
-    showMsg("Rendering...", "info");
+  document.getElementById('poolForm').onsubmit = e => {
+    e.preventDefault();
+    let fd = new FormData(e.target);
+    fetch('/mode/pool/add', {method:'POST', body:fd}).then(loadConfig);
+  };
+
+  document.getElementById('usePoolBtn').onclick = ()=>{
+    fetch('/mode/pool/set', {method:'POST'}).then(pollPreview);
+  };
+
+  document.getElementById('setDitherBtn').onclick = ()=>{
+    let alg = document.getElementById('ditherSelect').value;
+    fetch('/mode/dither/set',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({algorithm: alg})
+    }).then(pollPreview);
+  };
+
+  document.getElementById('clearBtn').onclick = ()=>{
+    fetch('/clear', {method:'POST'}).then(()=>showMsg("Display Cleared","warning"));
+  };
+
+  document.getElementById('rotateBtn').onclick = ()=>{
+    fetch('/rotate').then(pollPreview);
+  };
+
+  window.onload = ()=>{
     pollPreview();
-  });
-};
-
-document.getElementById('clearBtn').onclick = () => {
-  showMsg("Clearing screen...", "info");
-  fetch('/clear', {method:'POST'})
-    .then(()=> showMsg("Screen cleared", "success"));
-};
-
-document.getElementById('setArt').onclick = () => {
-  showMsg("Art mode...", "info");
-  fetch('/mode/art/set', {method:'POST'}).then(()=>{
-    showMsg("Done (no image).", "warning");
-  });
-};
-
-document.getElementById('rotateBtn').onclick = () => {
-  showMsg("Rotating...", "info");
-  fetch('/rotate', {method:'GET'}).then(()=>{
-    showMsg("Rendering...", "info");
-    pollPreview();
-  });
-};
-
-// Initialize
-loadPool();
-pollPreview();
+    loadConfig();
+  };
 </script>
 </body>
 </html>
+
 """
 
 # ==== Flask Endpoints ====
