@@ -507,6 +507,10 @@ def clear_endpoint():
     clear_screen()
     return jsonify(success=True)
 
+@app.route('/config', methods=['GET'])
+def get_config():
+    # return the live config object
+    return jsonify(config)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=80)
