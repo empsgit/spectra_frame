@@ -130,7 +130,7 @@ def atkinson_dither(image_pil, _palette_img):
     img_np = np.asarray(img).astype(np.float32) / 255.0
     dithered = atkinson_dither_numba(img_np.copy()) * 255.0
     dithered_img = Image.fromarray(np.clip(dithered, 0, 255).astype(np.uint8))
-    return dithered_img.convert("P", palette=palette_image, dither=Image.NONE)
+    return dithered_img.convert("P", palette=_palette_img, dither=Image.NONE)
 
 def error_diffusion(image, kernel, divisor, anchor):
     img = image.convert("RGB")
