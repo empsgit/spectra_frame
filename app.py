@@ -88,7 +88,7 @@ def apply_dithering(image, algorithm):
     if algorithm == "floyd-steinberg":
         return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
     if algorithm == "atkinson":
-        return atkinson_dither(image)
+        return atkinson_dither(image, _palette_img)
     if algorithm == "shiau-fan-2":
         return shiaufan2_dither(image)
 #    if algorithm == "jarvis-judice-ninke":
@@ -100,27 +100,40 @@ def apply_dithering(image, algorithm):
     # fallback
     return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
 
-def atkinson_dither(image):
-    img = image.convert("RGB")
-    pixels = img.load()
-    w, h = img.size
-    palette = [(255,0,0),(0,255,0),(0,0,255),(255,255,0),(0,0,0),(255,255,255)]
+def atkinson_dither(image_pil, palette_image):
+    img_array = np.array(image_pil.convert('RGB'), dtype=np.int16)
+    h, w, _ = img_array.shape
+
+    palette = np.array([[255,0,0],[0,255,0],[0,0,255],
+                        [255,255,0],[0,0,0],[255,255,255]], dtype=np.int16)
+
+    def closest_color(pixel):
+        distances = np.sum((palette - pixel)**2, axis=1)
+        return palette[np.argmin(distances)]
+
     for y in range(h):
         for x in range(w):
-            old = pixels[x,y]
-            new = min(palette, key=lambda c: sum((old[i]-c[i])**2 for i in range(3)))
-            pixels[x,y] = new
-            err = tuple(old[i]-new[i] for i in range(3))
-            for dx,dy in [(1,0),(2,0),(-1,1),(0,1),(1,1),(0,2)]:
-                nx, ny = x+dx, y+dy
-                if 0 <= nx < w and 0 <= ny < h:
-                    r,g,b = pixels[nx,ny]
-                    pixels[nx,ny] = (
-                        max(0, min(255, r + err[0]//8)),
-                        max(0, min(255, g + err[1]//8)),
-                        max(0, min(255, b + err[2]//8))
-                    )
-    return img.convert("P", palette=_palette_img, dither=Image.NONE)
+            old_pixel = img_array[y, x].copy()
+            new_pixel = closest_color(old_pixel)
+            img_array[y, x] = new_pixel
+            err = (old_pixel - new_pixel) // 8
+
+            if x + 1 < w:
+                img_array[y, x + 1] += err
+            if x + 2 < w:
+                img_array[y, x + 2] += err
+            if y + 1 < h:
+                if x - 1 >= 0:
+                    img_array[y + 1, x - 1] += err
+                img_array[y + 1, x] += err
+                if x + 1 < w:
+                    img_array[y + 1, x + 1] += err
+            if y + 2 < h:
+                img_array[y + 2, x] += err
+
+    np.clip(img_array, 0, 255, out=img_array)
+    final_img = Image.fromarray(img_array.astype(np.uint8), 'RGB')
+    return final_img.convert('P', palette=palette_image, dither=Image.NONE)
 
 def error_diffusion(image, kernel, divisor, anchor):
     img = image.convert("RGB")
