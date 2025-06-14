@@ -240,11 +240,11 @@ def initial_display():
 threading.Thread(target=initial_display, daemon=True).start()
 
 # ==== Flask & Inactivity ====
-app = Flask(__name__)
+#app = Flask(__name__)
 #last_activity = time.time()
 #TIMEOUT       = 20*60
 
-@app.before_request
+#@app.before_request
 #def touch_activity():
 #    global last_activity
 #    last_activity = time.time()
@@ -260,7 +260,6 @@ app = Flask(__name__)
 
 
 # ==== Web UI Template ====
-
 INDEX_HTML = """
 <!doctype html>
 <html lang="en">
