@@ -217,19 +217,26 @@ def process_image(path_or_file):
         img = img.rotate(90, expand=True)
     img = img.rotate(180, expand=True)
 
-    target_size = get_target_size()
-    fit_mode = config.get('fit_mode', 'pad')
+    fit_mode = config.get("fit_mode", "pad")
+    target = get_target_size()
 
     if fit_mode == "stretch":
-        img = img.resize(target_size, Image.Resampling.LANCZOS)
-    elif fit_mode == "zoom":
-        img = ImageOps.fit(img, target_size, method=Image.Resampling.LANCZOS)
-    elif fit_mode == "pad":
-        img.thumbnail(target_size, Image.Resampling.LANCZOS)
-        bg = Image.new("RGB", target_size, (255,255,255))
-        bg.paste(img, ((target_size[0] - img.width)//2, (target_size[1] - img.height)//2))
-        img = bg
+        img = img.resize(target, Image.Resampling.LANCZOS)
 
+    elif fit_mode == "zoom":
+        img = ImageOps.fit(img, target, method=Image.Resampling.LANCZOS)
+
+    elif fit_mode == "pad":
+        # First slightly zoom (e.g. 1.08x) then pad
+        zoom_factor = 1.08
+        temp_size = (
+            int(img.width * zoom_factor),
+            int(img.height * zoom_factor)
+        )
+        img = img.resize(temp_size, Image.Resampling.LANCZOS)
+        img = ImageOps.pad(img, target, color="white", method=Image.Resampling.LANCZOS)
+
+    # Optional enhancements
     img = ImageOps.autocontrast(img)
     img = ImageEnhance.Color(img).enhance(3.0)
     return img
@@ -324,7 +331,7 @@ INDEX_HTML = """
         <option value="zoom">Zoom to Fill</option>
         <option value="stretch">Stretch</option>
       </select>
-    <button id="setFitMode" class="btn btn-primary mt-2">Apply & Refresh</button>
+    <button id="setFit" class="btn btn-primary mt-2">Apply & Refresh</button>
   </div>
   <div class="section">
     <h3>Dithering Algorithm</h3>
@@ -362,16 +369,16 @@ INDEX_HTML = """
   </div>
 <script>
 
-document.getElementById('setFitMode').onclick = () => {
-  const mode = document.getElementById('fitModeSelect').value;
+document.getElementById('setFit').onclick = () => {
+  const mode = document.getElementById('fitSelect').value;
   showMsg("Applying fit mode...", "info");
   fetch('/mode/fit/set', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body: JSON.stringify({fit_mode: mode})
-  }).then(()=>{
+  }).then(()=> {
     showMsg("Rendering...", "info");
-    loadConfig();
+    pollPreview();
   });
 };
 
@@ -573,14 +580,27 @@ def set_art_mode():
 @app.route('/mode/fit/set', methods=['POST'])
 def set_fit_mode():
     data = request.get_json() or {}
-    mode = data.get('fit_mode')
-    if mode in ("pad", "zoom", "stretch"):
-        config['fit_mode'] = mode
-        save_config()
-        if current_image is not None:
-            threading.Thread(target=lambda: update_epaper_thread(current_image), daemon=True).start()
+    mode = data.get("fit_mode", "pad")
+    if mode not in ("pad", "zoom", "stretch"):
+        return jsonify(error="Invalid fit mode"), 400
+
+    config['fit_mode'] = mode
+    save_config()
+
+    # Reprocess and re-render current image from disk
+    try:
+        if config['mode'] == 'single' and config['single_image']:
+            path = os.path.join(single_dir, config['single_image'])
+        elif config['mode'] == 'pool' and config['pool_images']:
+            path = os.path.join(pool_dir, config['pool_images'][0])
+        else:
+            return jsonify(success=True)  # nothing to render
+
+        image = process_image(path)
+        threading.Thread(target=lambda: update_epaper_thread(image), daemon=True).start()
         return jsonify(success=True)
-    return jsonify(error="Invalid fit mode"), 400
+    except Exception as e:
+        return jsonify(error=str(e)), 500
 
 @app.route('/mode/dither/set', methods=['POST'])
 def set_dither():
