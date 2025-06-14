@@ -241,22 +241,22 @@ threading.Thread(target=initial_display, daemon=True).start()
 
 # ==== Flask & Inactivity ====
 app = Flask(__name__)
-last_activity = time.time()
-TIMEOUT       = 20*60
+#last_activity = time.time()
+#TIMEOUT       = 20*60
 
 @app.before_request
-def touch_activity():
-    global last_activity
-    last_activity = time.time()
+#def touch_activity():
+#    global last_activity
+#    last_activity = time.time()
 
-def watchdog():
-    while True:
-        time.sleep(60)
-        if time.time() - last_activity > TIMEOUT:
-            os.system("sudo shutdown now")
-            break
+#def watchdog():
+#    while True:
+#        time.sleep(60)
+#        if time.time() - last_activity > TIMEOUT:
+#            os.system("sudo shutdown now")
+#            break
 
-threading.Thread(target=watchdog, daemon=True).start()
+#threading.Thread(target=watchdog, daemon=True).start()
 
 
 # ==== Web UI Template ====
@@ -316,7 +316,7 @@ INDEX_HTML = """
   <div class="section">
     <h3>Live Preview</h3>
     <div id="msg"></div>
-    <img id="preview" src="" class="img-fluid" style="max-width: 400px;">
+    <img id="preview" src="/preview.png" class="img-fluid" style="max-width: 400px;">
     <button id="rotateBtn" class="btn btn-warning mt-2">Rotate 90°</button>
   </div>
 
@@ -329,20 +329,6 @@ INDEX_HTML = """
   function showMsg(txt, cls="info"){
     document.getElementById('msg').innerHTML =
       `<div class="alert alert-${cls}">${txt}</div>`;
-  }
-
-  function pollPreview(){
-    fetch('/preview').then(r=>r.json()).then(d=>{
-      if(d.success){
-        document.getElementById('preview').src =
-          "data:image/png;base64," + d.rendered_image;
-        showMsg("Rendering Complete!","success");
-        loadConfig();
-      } else {
-        showMsg("Rendering...","info");
-        setTimeout(pollPreview, 1000);
-      }
-    });
   }
 
   function loadConfig(){
@@ -359,17 +345,21 @@ INDEX_HTML = """
   document.getElementById('singleForm').onsubmit = e => {
     e.preventDefault();
     let fd = new FormData(e.target);
-    fetch('/mode/single', {method:'POST', body:fd}).then(pollPreview);
+    fetch('/mode/single', {method:'POST', body:fd})
+      .then(() => showMsg("Rendering... Please refresh manually.", "info"));
   };
 
   document.getElementById('poolForm').onsubmit = e => {
     e.preventDefault();
     let fd = new FormData(e.target);
-    fetch('/mode/pool/add', {method:'POST', body:fd}).then(loadConfig);
+    fetch('/mode/pool/add', {method:'POST', body:fd})
+      .then(() => showMsg("Image(s) added. Please refresh manually.", "success"))
+      .then(loadConfig);
   };
 
   document.getElementById('usePoolBtn').onclick = ()=>{
-    fetch('/mode/pool/set', {method:'POST'}).then(pollPreview);
+    fetch('/mode/pool/set', {method:'POST'})
+      .then(() => showMsg("Rendering... Please refresh manually.", "info"));
   };
 
   document.getElementById('setDitherBtn').onclick = ()=>{
@@ -378,21 +368,22 @@ INDEX_HTML = """
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({algorithm: alg})
-    }).then(pollPreview);
+    }).then(() => showMsg("Rendering... Please refresh manually.", "info"));
   };
 
   document.getElementById('clearBtn').onclick = ()=>{
-    fetch('/clear', {method:'POST'}).then(()=>showMsg("Display Cleared","warning"));
+    fetch('/clear', {method:'POST'}).then(() => {
+      showMsg("Display cleared. Please refresh manually.", "warning");
+    });
   };
 
   document.getElementById('rotateBtn').onclick = ()=>{
-    fetch('/rotate').then(pollPreview);
+    fetch('/rotate').then(() => {
+      showMsg("Rotating... Please refresh manually.", "info");
+    });
   };
 
-  window.onload = ()=>{
-    pollPreview();
-    loadConfig();
-  };
+  window.onload = loadConfig;
 </script>
 </body>
 </html>
