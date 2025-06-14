@@ -383,7 +383,7 @@ document.getElementById('setFitMode').onclick = () => {
 };
 
 function showMsg(txt, cls="info") {
-  document.getElementById('msg').innerHTML = `<div class="alert alert-${cls}">${txt}</div>`;
+  document.getElementById('msg').innerHTML = <div class="alert alert-${cls}">${txt}</div>;
 }
 
   function loadConfig(){
@@ -402,7 +402,7 @@ function showMsg(txt, cls="info") {
 
   fetch('/pool/list').then(r=>r.json()).then(p=>{
     let ul = document.getElementById('poolList');
-    ul.innerHTML = p.map(i=>`<li>${i}</li>`).join('');
+    ul.innerHTML = p.map(i=><li>${i}</li>).join('');
   });
 }
 
