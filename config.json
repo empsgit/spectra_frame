@@ -2,5 +2,6 @@
   "mode": "single",
   "single_image": "",
   "pool_images": [],
-  "dithering": "floyd-steinberg"
+  "dithering": "floyd-steinberg",
+  "update_count": 0
 }
