@@ -331,7 +331,7 @@ INDEX_HTML = """
         <option value="zoom">Zoom to Fill</option>
         <option value="stretch">Stretch</option>
       </select>
-    <button id="setFit" class="btn btn-primary mt-2">Apply & Refresh</button>
+    <button id="fitModeSelect" class="btn btn-primary mt-2">Apply & Refresh</button>
   </div>
   <div class="section">
     <h3>Dithering Algorithm</h3>
@@ -369,8 +369,8 @@ INDEX_HTML = """
   </div>
 <script>
 
-document.getElementById('setFit').onclick = () => {
-  const mode = document.getElementById('fitSelect').value;
+document.getElementById('fitModeSelect').onclick = () => {
+  const mode = document.getElementById('fitModeSelect').value;
   showMsg("Applying fit mode...", "info");
   fetch('/mode/fit/set', {
     method:'POST',
@@ -393,7 +393,7 @@ function showMsg(txt, cls="info") {
 
     // Sync dropdowns to config values
     if (c.fit_mode) {
-      document.getElementById('fitMode').value = c.fit_mode;
+      document.getElementById('fitModeSelect').value = c.fit_mode;
     }
     if (c.dithering) {
       document.getElementById('ditherSelect').value = c.dithering;
