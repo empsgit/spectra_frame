@@ -78,43 +78,6 @@ _palette_img = Image.new("P",(1,1))
 _palette_img.putpalette(_custom_palette)
 
 # ==== Dithering Algorithms ====
-def atkinson_dither_fast(image):
-    img = image.convert("RGB")
-    arr = np.array(img, dtype=np.uint8)
-    h, w, _ = arr.shape
-    arr = arr.astype(np.int32)
-
-    palette = np.array([
-        [255,0,0],    # red
-        [0,255,0],    # green
-        [0,0,255],    # blue
-        [255,255,0],  # yellow
-        [0,0,0],      # black
-        [255,255,255] # white
-    ])
-
-    def find_closest(color):
-        diff = palette - color
-        dist = np.sum(diff**2, axis=1)
-        return palette[np.argmin(dist)]
-
-    for y in range(h):
-        for x in range(w):
-            old_pixel = arr[y, x]
-            new_pixel = find_closest(old_pixel)
-            arr[y, x] = new_pixel
-            error = (old_pixel - new_pixel) // 8
-            for dx, dy in [(1,0),(2,0),(-1,1),(0,1),(1,1),(0,2)]:
-                nx, ny = x + dx, y + dy
-                if 0 <= nx < w and 0 <= ny < h:
-                    arr[ny, nx] = np.clip(arr[ny, nx] + error, 0, 255)
-
-    dithered_img = Image.fromarray(arr.astype(np.uint8), "RGB")
-    return dithered_img.convert("P", palette=_palette_img, dither=Image.NONE)
-
-
-
-
 
 def apply_dithering(image, algorithm):
     """
@@ -123,7 +86,7 @@ def apply_dithering(image, algorithm):
     if algorithm == "floyd-steinberg":
         return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
     if algorithm == "atkinson":
-        return atkinson_dither_fast(image)
+        return atkinson_dither(image)
     if algorithm == "shiau-fan-2":
         return shiaufan2_dither(image)
 #    if algorithm == "jarvis-judice-ninke":
@@ -137,25 +100,36 @@ def apply_dithering(image, algorithm):
 
 def atkinson_dither(image):
     img = image.convert("RGB")
-    pixels = img.load()
-    w, h = img.size
-    palette = [(255,0,0),(0,255,0),(0,0,255),(255,255,0),(0,0,0),(255,255,255)]
-    for y in range(h):
-        for x in range(w):
-            old = pixels[x,y]
-            new = min(palette, key=lambda c: sum((old[i]-c[i])**2 for i in range(3)))
-            pixels[x,y] = new
-            err = tuple(old[i]-new[i] for i in range(3))
-            for dx,dy in [(1,0),(2,0),(-1,1),(0,1),(1,1),(0,2)]:
-                nx, ny = x+dx, y+dy
-                if 0 <= nx < w and 0 <= ny < h:
-                    r,g,b = pixels[nx,ny]
-                    pixels[nx,ny] = (
-                        max(0, min(255, r + err[0]//8)),
-                        max(0, min(255, g + err[1]//8)),
-                        max(0, min(255, b + err[2]//8))
-                    )
-    return img.convert("P", palette=_palette_img, dither=Image.NONE)
+    arr = np.array(img, dtype=np.int32)
+    height, width, _ = arr.shape
+
+    palette = np.array([
+        (255, 0, 0),     # red
+        (0, 255, 0),     # green
+        (0, 0, 255),     # blue
+        (255, 255, 0),   # yellow
+        (0, 0, 0),       # black
+        (255, 255, 255)  # white
+    ], dtype=np.int32)
+
+    def find_closest(color):
+        d = palette - color
+        return palette[np.argmin(np.sum(d ** 2, axis=1))]
+
+    for y in range(height):
+        for x in range(width):
+            old = arr[y, x]
+            new = find_closest(old)
+            arr[y, x] = new
+            error = (old - new) // 8
+
+            for dx, dy in [(1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2)]:
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < width and 0 <= ny < height:
+                    arr[ny, nx] = np.clip(arr[ny, nx] + error, 0, 255)
+
+    result = Image.fromarray(arr.astype(np.uint8), mode='RGB')
+    return result.convert("P", palette=_palette_img, dither=Image.NONE)
 
 def error_diffusion(image, kernel, divisor, anchor):
     img = image.convert("RGB")
