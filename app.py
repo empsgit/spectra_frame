@@ -95,8 +95,85 @@ def apply_dithering(image, algorithm):
         return burkes_dither(image)
     return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
 
-# ... (include atkinson_dither, error_diffusion, shiaufan2_dither,
-#      jarvis_judice_ninke_dither, stucki_dither, burkes_dither here) ...
+def atkinson_dither(image):
+    img = image.convert("RGB")
+    pixels = img.load()
+    w, h = img.size
+    palette = [(255,0,0),(0,255,0),(0,0,255),(255,255,0),(0,0,0),(255,255,255)]
+    for y in range(h):
+        for x in range(w):
+            old = pixels[x,y]
+            new = min(palette, key=lambda c: sum((old[i]-c[i])**2 for i in range(3)))
+            pixels[x,y] = new
+            err = tuple(old[i]-new[i] for i in range(3))
+            for dx,dy in [(1,0),(2,0),(-1,1),(0,1),(1,1),(0,2)]:
+                nx, ny = x+dx, y+dy
+                if 0 <= nx < w and 0 <= ny < h:
+                    r,g,b = pixels[nx,ny]
+                    pixels[nx,ny] = (
+                        max(0, min(255, r + err[0]//8)),
+                        max(0, min(255, g + err[1]//8)),
+                        max(0, min(255, b + err[2]//8))
+                    )
+    return img.convert("P", palette=_palette_img, dither=Image.NONE)
+
+def error_diffusion(image, kernel, divisor, anchor):
+    img = image.convert("RGB")
+    pixels = img.load()
+    w, h = img.size
+    palette = [(255,0,0),(0,255,0),(0,0,255),(255,255,0),(0,0,0),(255,255,255)]
+    kh, kw = len(kernel), len(kernel[0])
+    ax, ay = anchor
+    for y in range(h):
+        for x in range(w):
+            old = pixels[x,y]
+            new = min(palette, key=lambda c: sum((old[i]-c[i])**2 for i in range(3)))
+            pixels[x,y] = new
+            err = tuple(old[i]-new[i] for i in range(3))
+            for dy in range(kh):
+                for dx in range(kw):
+                    val = kernel[dy][dx]
+                    if val == 0: continue
+                    nx, ny = x + dx - ax, y + dy - ay
+                    if 0 <= nx < w and 0 <= ny < h:
+                        r,g,b = pixels[nx,ny]
+                        pixels[nx,ny] = (
+                            max(0, min(255, r + err[0]*val//divisor)),
+                            max(0, min(255, g + err[1]*val//divisor)),
+                            max(0, min(255, b + err[2]*val//divisor))
+                        )
+    return img.convert("P", palette=_palette_img, dither=Image.NONE)
+
+def shiaufan2_dither(image):
+    kernel = [
+        [0,0,   0,   8,   4],
+        [2,4,   8,   4,   2],
+        [1,2,   4,   2,   1]
+    ]
+    return error_diffusion(image, kernel, divisor=42, anchor=(0,0))
+
+def jarvis_judice_ninke_dither(image):
+    kernel = [
+        [0,0,   7,   5,   3],
+        [3,5,   7,   5,   3],
+        [1,3,   5,   3,   1]
+    ]
+    return error_diffusion(image, kernel, divisor=48, anchor=(2,0))
+
+def stucki_dither(image):
+    kernel = [
+        [0,0,   8,   4,   2],
+        [2,4,   8,   4,   2],
+        [1,2,   4,   2,   1]
+    ]
+    return error_diffusion(image, kernel, divisor=42, anchor=(2,0))
+
+def burkes_dither(image):
+    kernel = [
+        [0,0,   8,   4,   0],
+        [2,4,   8,   4,   2]
+    ]
+    return error_diffusion(image, kernel, divisor=32, anchor=(2,0))
 
 # ==== Display Logic with persisted counter ====
 def display_image(image):
@@ -114,7 +191,7 @@ def display_image(image):
     # standard update
     epd.Init()
     img = ImageOps.fit(image, get_target_size(), method=Image.Resampling.LANCZOS)
-    dithered = apply_dithering(img, config['dithering'])
+    dithered = apply_dithering(img, config.get("dithering", "floyd-steinberg"))
     buf = epd.getbuffer(dithered)
     epd.display(buf)
     epd.sleep()
