@@ -472,8 +472,7 @@ def index():
 
 @app.route('/preview', methods=['GET'])
 def preview():
-    return jsonify(rendered_image=rendered_image_data,
-                   success=rendering_complete)
+    return jsonify(rendered_image=rendered_data, success=rendering_complete)
 
 @app.route('/mode/single', methods=['POST'])
 def set_single():
