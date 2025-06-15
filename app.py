@@ -9,7 +9,10 @@ import base64
 import json
 import random
 import numpy as np
-import numba as nb
+from numba import njit, set_num_threads
+set_num_threads(1)
+
+
 
 from flask import Flask, request, render_template_string, jsonify
 from werkzeug.utils import secure_filename
@@ -80,7 +83,7 @@ _palette_img.putpalette(_custom_palette)
 # ==== Dithering Algorithms ====
 
 #numba loops 
-@nb.njit
+@njit(cache=True)
 def quantize_pixel(pixel, palette):
     best_idx = 0
     min_dist = 1e10
@@ -94,7 +97,7 @@ def quantize_pixel(pixel, palette):
             best_idx = i
     return palette[best_idx]
 
-@nb.njit
+@njit(cache=True)
 def atkinson_loop(img, h, w, palette):
     output = np.zeros((h, w, 3), dtype=np.uint8)
     offsets = [(1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2)]
