@@ -264,6 +264,7 @@ def initial_display():
         #p = os.path.join(single_dir, config['single_image'])
         #if os.path.exists(p):
             #update_epaper_thread(process_image(p))
+        return    
     elif m == 'pool' and config['pool_images']:
         fn = random.choice(config['pool_images'])
         p = os.path.join(pool_dir, fn)
