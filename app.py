@@ -368,27 +368,28 @@ INDEX_HTML = """
     <pre id="configDisplay" class="bg-light p-3"></pre>
   </div>
 <script>
-
-document.getElementById('setFitMode').onclick = () => {
-  const mode = document.getElementById('fitModeSelect').value;
-  showMsg("Applying fit mode...", "info");
-  fetch('/mode/fit/set', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({fit_mode: mode})
-  }).then(()=> {
-    showMsg("Rendering...", "info");
-    pollPreview();
-  });
-};
-
 function showMsg(txt, cls="info") {
   document.getElementById('msg').innerHTML = `<div class="alert alert-${cls}">${txt}</div>`;
 }
 
-function loadConfig() {
-  fetch('/config').then(r => r.json()).then(c => {
-    document.getElementById('configDisplay').innerText = JSON.stringify(c, null, 2);
+function pollPreview() {
+  fetch('/preview')
+    .then(response => response.json())
+    .then(data => {
+      if (data.rendered_image) {
+        document.getElementById('preview').src = "data:image/png;base64," + data.rendered_image;
+        showMsg("Rendering complete!", "success");
+      } else {
+        setTimeout(pollPreview, 3000); 
+      }
+    })
+    .catch(e => showMsg("Error fetching preview: " + e, "danger"));
+}
+
+function loadConfig(){
+  fetch('/config').then(r=>r.json()).then(c=>{
+    document.getElementById('configDisplay').innerText =
+      JSON.stringify(c, null, 2);
 
     if (c.fit_mode) {
       document.getElementById('fitModeSelect').value = c.fit_mode;
@@ -398,82 +399,48 @@ function loadConfig() {
     }
   });
 
-  fetch('/pool/list').then(r => r.json()).then(p => {
-    let ul = document.getElementById('poolList');
-    ul.innerHTML = p.map(i => `<li>${i}</li>`).join('');
-  });
-}
-
   fetch('/pool/list').then(r=>r.json()).then(p=>{
     let ul = document.getElementById('poolList');
-    ul.innerHTML = p.map(i=><li>${i}</li>).join('');
+    ul.innerHTML = p.map(i=>`<li>${i}</li>`).join('');
   });
 }
 
-function loadPool() {
-  fetch('/pool/list').then(r=>r.json()).then(arr=>{
-    const ul = document.getElementById('poolList');
-    ul.innerHTML = "";
-    arr.forEach(fn => {
-      const li = document.createElement('li');
-      li.textContent = fn + " ";
-      const btn = document.createElement('button');
-      btn.textContent = "Remove";
-      btn.className = "btn btn-sm btn-danger ml-2";
-      btn.onclick = () => {
-        fetch('/mode/pool/remove', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({filename: fn})
-        }).then(loadPool);
-      };
-      li.appendChild(btn);
-      ul.appendChild(li);
-    });
-  });
-}
-
-// Handlers
 document.getElementById('singleForm').onsubmit = e => {
   e.preventDefault();
   showMsg("Uploading...", "info");
   fetch('/mode/single', {method:'POST', body:new FormData(e.target)})
-    .then(()=>{
-      showMsg("Rendering...", "info");
-      pollPreview();
-    });
+    .then(()=>{ showMsg("Rendering...", "info"); pollPreview(); });
 };
 
 document.getElementById('addPoolForm').onsubmit = e => {
   e.preventDefault();
   showMsg("Adding to pool...", "info");
   fetch('/mode/pool/add', {method:'POST', body:new FormData(e.target)})
-    .then(()=>{
-      showMsg("Done.", "success");
-      loadPool();
-    });
+    .then(()=>{ showMsg("Done.", "success"); loadConfig(); });
 };
 
 document.getElementById('setPool').onclick = () => {
   showMsg("Setting pool mode...", "info");
   fetch('/mode/pool/set', {method:'POST'})
-    .then(()=>{
-      showMsg("Rendering...", "info");
-      pollPreview();
-    });
+    .then(()=>{ showMsg("Rendering...", "info"); pollPreview(); });
+};
+
+document.getElementById('setFitMode').onclick = () => {
+  const mode = document.getElementById('fitModeSelect').value;
+  showMsg("Applying fit mode...", "info");
+  fetch('/mode/fit/set', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({fit_mode: mode})
+  }).then(()=> { showMsg("Rendering...", "info"); pollPreview(); });
 };
 
 document.getElementById('setDither').onclick = () => {
   const alg = document.getElementById('ditherSelect').value;
   showMsg("Applying dithering...", "info");
   fetch('/mode/dither/set', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
+    method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({algorithm: alg})
-  }).then(()=>{
-    showMsg("Rendering...", "info");
-    pollPreview();
-  });
+  }).then(()=>{ showMsg("Rendering...", "info"); pollPreview(); });
 };
 
 document.getElementById('clearBtn').onclick = () => {
@@ -482,25 +449,14 @@ document.getElementById('clearBtn').onclick = () => {
     .then(()=> showMsg("Screen cleared", "success"));
 };
 
-document.getElementById('setArt').onclick = () => {
-  showMsg("Art mode...", "info");
-  fetch('/mode/art/set', {method:'POST'}).then(()=>{
-    showMsg("Done (no image).", "warning");
-  });
-};
-
 document.getElementById('rotateBtn').onclick = () => {
   showMsg("Rotating...", "info");
-  fetch('/rotate', {method:'GET'}).then(()=>{
-    showMsg("Rendering...", "info");
-    pollPreview();
-  });
+  fetch('/rotate', {method:'GET'}).then(()=>{ showMsg("Rendering...", "info"); pollPreview(); });
 };
 
-// Initialize
-loadPool();
-//pollPreview();
 loadConfig();
+loadPool();
+pollPreview();
 </script>
 </body>
 </html>
