@@ -55,7 +55,7 @@ config = load_config()
 epd = epd13in3E.EPD()
 try:
     epd.Init()
-    epd.Clear()
+#    epd.Clear()
     epd.sleep()
 except Exception as e:
     print("EPD init error:", e)
@@ -214,7 +214,7 @@ def process_image(path_or_file):
     img = Image.open(path_or_file).convert("RGB")
     img = ImageOps.exif_transpose(img)
     if img.height > img.width:
-        img = img.rotate(90, expand=True)
+        img = img.rotate(270, expand=True)
     img = img.rotate(0, expand=True)
 
     fit_mode = config.get("fit_mode", "pad")
@@ -261,9 +261,9 @@ def update_epaper_thread(image):
 def initial_display():
     m = config['mode']
     if m == 'single' and config['single_image']:
-        p = os.path.join(single_dir, config['single_image'])
-        if os.path.exists(p):
-            update_epaper_thread(process_image(p))
+#        p = os.path.join(single_dir, config['single_image'])
+#        if os.path.exists(p):
+#            update_epaper_thread(process_image(p))
     elif m == 'pool' and config['pool_images']:
         fn = random.choice(config['pool_images'])
         p = os.path.join(pool_dir, fn)
