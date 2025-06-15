@@ -55,7 +55,7 @@ config = load_config()
 epd = epd13in3E.EPD()
 try:
     epd.Init()
-#    epd.Clear()
+    epd.Clear()
     epd.sleep()
 except Exception as e:
     print("EPD init error:", e)
@@ -383,15 +383,13 @@ document.getElementById('setFitMode').onclick = () => {
 };
 
 function showMsg(txt, cls="info") {
-  document.getElementById('msg').innerHTML = <div class="alert alert-${cls}">${txt}</div>;
+  document.getElementById('msg').innerHTML = `<div class="alert alert-${cls}">${txt}</div>`;
 }
 
-  function loadConfig(){
-  fetch('/config').then(r=>r.json()).then(c=>{
-    document.getElementById('configDisplay').innerText =
-      JSON.stringify(c, null, 2);
+function loadConfig() {
+  fetch('/config').then(r => r.json()).then(c => {
+    document.getElementById('configDisplay').innerText = JSON.stringify(c, null, 2);
 
-    // Sync dropdowns to config values
     if (c.fit_mode) {
       document.getElementById('fitModeSelect').value = c.fit_mode;
     }
@@ -399,6 +397,12 @@ function showMsg(txt, cls="info") {
       document.getElementById('ditherSelect').value = c.dithering;
     }
   });
+
+  fetch('/pool/list').then(r => r.json()).then(p => {
+    let ul = document.getElementById('poolList');
+    ul.innerHTML = p.map(i => `<li>${i}</li>`).join('');
+  });
+}
 
   fetch('/pool/list').then(r=>r.json()).then(p=>{
     let ul = document.getElementById('poolList');
