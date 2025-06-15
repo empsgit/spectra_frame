@@ -215,7 +215,7 @@ def process_image(path_or_file):
     img = ImageOps.exif_transpose(img)
     if img.height > img.width:
         img = img.rotate(90, expand=True)
-    img = img.rotate(180, expand=True)
+    img = img.rotate(0, expand=True)
 
     fit_mode = config.get("fit_mode", "pad")
     target = get_target_size()
