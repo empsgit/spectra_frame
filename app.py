@@ -9,10 +9,7 @@ import base64
 import json
 import random
 import numpy as np
-from numba import njit, set_num_threads
-set_num_threads(1)
-
-
+import numba as nb
 
 from flask import Flask, request, render_template_string, jsonify
 from werkzeug.utils import secure_filename
@@ -82,39 +79,6 @@ _palette_img.putpalette(_custom_palette)
 
 # ==== Dithering Algorithms ====
 
-#numba loops 
-@njit(cache=True)
-def quantize_pixel(pixel, palette):
-    best_idx = 0
-    min_dist = 1e10
-    for i in range(palette.shape[0]):
-        dist = 0
-        for j in range(3):
-            d = pixel[j] - palette[i][j]
-            dist += d * d
-        if dist < min_dist:
-            min_dist = dist
-            best_idx = i
-    return palette[best_idx]
-
-@njit(cache=True)
-def atkinson_loop(img, h, w, palette):
-    output = np.zeros((h, w, 3), dtype=np.uint8)
-    offsets = [(1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2)]
-
-    for y in range(h):
-        for x in range(w):
-            pixel = img[y, x]
-            new_pixel = quantize_pixel(pixel, palette)
-            output[y, x] = new_pixel
-            error = (pixel - new_pixel) / 8.0
-            for dx, dy in offsets:
-                nx, ny = x + dx, y + dy
-                if 0 <= nx < w and 0 <= ny < h:
-                    img[ny, nx] += error
-    return output
-
-
 def apply_dithering(image, algorithm):
     """
     Convert a PIL-RGB image into our 6-color palette using the selected algorithm.
@@ -135,15 +99,26 @@ def apply_dithering(image, algorithm):
     return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
 
 def atkinson_dither(image):
-    img = np.array(image.convert("RGB"), dtype=np.float32)
-    h, w, _ = img.shape
-    palette = np.array([
-        [255, 0, 0], [0, 255, 0], [0, 0, 255],
-        [255, 255, 0], [0, 0, 0], [255, 255, 255]
-    ], dtype=np.uint8)
-
-    output = atkinson_loop(img, h, w, palette)
-    return Image.fromarray(output, mode='RGB').convert("P", palette=_palette_img, dither=Image.NONE)
+    img = image.convert("RGB")
+    pixels = img.load()
+    w, h = img.size
+    palette = [(255,0,0),(0,255,0),(0,0,255),(255,255,0),(0,0,0),(255,255,255)]
+    for y in range(h):
+        for x in range(w):
+            old = pixels[x,y]
+            new = min(palette, key=lambda c: sum((old[i]-c[i])**2 for i in range(3)))
+            pixels[x,y] = new
+            err = tuple(old[i]-new[i] for i in range(3))
+            for dx,dy in [(1,0),(2,0),(-1,1),(0,1),(1,1),(0,2)]:
+                nx, ny = x+dx, y+dy
+                if 0 <= nx < w and 0 <= ny < h:
+                    r,g,b = pixels[nx,ny]
+                    pixels[nx,ny] = (
+                        max(0, min(255, r + err[0]//8)),
+                        max(0, min(255, g + err[1]//8)),
+                        max(0, min(255, b + err[2]//8))
+                    )
+    return img.convert("P", palette=_palette_img, dither=Image.NONE)
 
 def error_diffusion(image, kernel, divisor, anchor):
     img = image.convert("RGB")
