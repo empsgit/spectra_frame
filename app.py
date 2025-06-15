@@ -261,9 +261,9 @@ def update_epaper_thread(image):
 def initial_display():
     m = config['mode']
     if m == 'single' and config['single_image']:
-#        p = os.path.join(single_dir, config['single_image'])
-#        if os.path.exists(p):
-#            update_epaper_thread(process_image(p))
+        #p = os.path.join(single_dir, config['single_image'])
+        #if os.path.exists(p):
+            #update_epaper_thread(process_image(p))
     elif m == 'pool' and config['pool_images']:
         fn = random.choice(config['pool_images'])
         p = os.path.join(pool_dir, fn)
