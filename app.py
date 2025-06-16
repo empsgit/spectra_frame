@@ -8,8 +8,8 @@ import io
 import base64
 import json
 import random
-import numpy as np
-import numba as nb
+#import numpy as np
+#import numba as nb
 
 from flask import Flask, request, render_template_string, jsonify
 from werkzeug.utils import secure_filename
@@ -404,7 +404,23 @@ function loadConfig(){
 
   fetch('/pool/list').then(r=>r.json()).then(p=>{
     let ul = document.getElementById('poolList');
-    ul.innerHTML = p.map(i=>`<li>${i}</li>`).join('');
+    ul.innerHTML = "";
+    arr.forEach(fn => {
+      const li = document.createElement('li');
+      li.textContent = fn + " ";
+      const btn = document.createElement('button');
+      btn.textContent = "Remove";
+      btn.className = "btn btn-sm btn-danger ml-2";
+      btn.onclick = () => {
+        fetch('/mode/pool/remove', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({filename: fn})
+        }).then(loadPool);
+      };
+      li.appendChild(btn);
+      ul.appendChild(li);
+    });
   });
 }
 
@@ -458,7 +474,6 @@ document.getElementById('rotateBtn').onclick = () => {
 };
 
 loadConfig();
-loadPool();
 pollPreview();
 </script>
 </body>
