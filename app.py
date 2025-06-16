@@ -405,7 +405,7 @@ function loadConfig(){
   fetch('/pool/list').then(r=>r.json()).then(p=>{
     let ul = document.getElementById('poolList');
     ul.innerHTML = "";
-    arr.forEach(fn => {
+    p.forEach(fn => {
       const li = document.createElement('li');
       li.textContent = fn + " ";
       const btn = document.createElement('button');
