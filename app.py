@@ -164,6 +164,7 @@ def display_image(image):
             epd.Init()
             epd.Clear()
             epd.sleep()
+            update_count = 0    
 
         # Update image normally
         epd.Init()
