@@ -98,27 +98,18 @@ def apply_dithering(image, algorithm):
     # fallback
     return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
 
-def atkinson_dither(image):
-    img = image.convert("RGB")
-    pixels = img.load()
-    w, h = img.size
-    palette = [(255,0,0),(0,255,0),(0,0,255),(255,255,0),(0,0,0),(255,255,255)]
-    for y in range(h):
-        for x in range(w):
-            old = pixels[x,y]
-            new = min(palette, key=lambda c: sum((old[i]-c[i])**2 for i in range(3)))
-            pixels[x,y] = new
-            err = tuple(old[i]-new[i] for i in range(3))
-            for dx,dy in [(1,0),(2,0),(-1,1),(0,1),(1,1),(0,2)]:
-                nx, ny = x+dx, y+dy
-                if 0 <= nx < w and 0 <= ny < h:
-                    r,g,b = pixels[nx,ny]
-                    pixels[nx,ny] = (
-                        max(0, min(255, r + err[0]//8)),
-                        max(0, min(255, g + err[1]//8)),
-                        max(0, min(255, b + err[2]//8))
-                    )
-    return img.convert("P", palette=_palette_img, dither=Image.NONE)
+from lib.dither_core import atkinson_dither as cy_atkinson_dither
+
+_palette_rgb = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 0, 0), (255, 255, 255)]
+_palette_bytes = sum(_palette_rgb, ()) + (0,) * (768 - len(_palette_rgb) * 3)
+_palette_img = Image.new("P", (1, 1))
+_palette_img.putpalette(_palette_bytes)
+
+def atkinson_dither(image: Image.Image) -> Image.Image:
+    img = np.array(image.convert("RGB"), dtype=np.float32)
+    palette = np.array(_palette_rgb, dtype=np.uint8)
+    output = cy_atkinson_dither(img, palette)
+    return Image.fromarray(output, mode='RGB').convert("P", palette=_palette_img, dither=Image.NONE)
 
 def error_diffusion(image, kernel, divisor, anchor):
     img = image.convert("RGB")
