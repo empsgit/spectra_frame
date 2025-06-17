@@ -8,8 +8,8 @@ import io
 import base64
 import json
 import random
-#import numpy as np
-#import numba as nb
+import numpy as np
+import numba as nb
 
 from flask import Flask, request, render_template_string, jsonify
 from werkzeug.utils import secure_filename
