@@ -480,22 +480,24 @@ def set_single():
         os.remove(os.path.join(single_dir, e))
     path = os.path.join(single_dir, fn)
     f.save(path)
-    config['mode']         = 'single'
-    config['single_image'] = fn
-    save_config()
+    cfg = load_config()  # load fresh config
+    cfg['mode'] = 'single'
+    cfg['single_image'] = fn
+    save_config_persist(cfg)  # save immediately
     threading.Thread(target=lambda: update_epaper_thread(process_image(path)), daemon=True).start()
     return jsonify(success=True)
 
 @app.route('/mode/pool/add', methods=['POST'])
 def pool_add():
     files = request.files.getlist('images')
+    cfg = load_config()
     for f in files:
         fn = secure_filename(f.filename)
         path = os.path.join(pool_dir, fn)
         f.save(path)
-        if fn not in config['pool_images']:
-            config['pool_images'].append(fn)
-    save_config()
+        if fn not in cfg['pool_images']:
+            cfg['pool_images'].append(fn)
+    save_config_persist(cfg)
     return jsonify(success=True)
 
 @app.route('/pool/list', methods=['GET'])
@@ -506,8 +508,9 @@ def pool_list():
 def pool_remove():
     data = request.get_json() or {}
     fn = data.get('filename')
-    if fn in config['pool_images']:
-        config['pool_images'].remove(fn)
+    cfg = load_config()
+    if fn in cfg['pool_images']:
+        cfg['pool_images'].remove(fn)
         save_config()
         p = os.path.join(pool_dir, fn)
         if os.path.exists(p):
@@ -516,19 +519,21 @@ def pool_remove():
 
 @app.route('/mode/pool/set', methods=['POST'])
 def set_pool_mode():
-    if not config['pool_images']:
+    cfg = load_config()
+    if not cfg['pool_images']:
         return jsonify(error="No images in pool"), 400
-    config['mode'] = 'pool'
-    save_config()
-    fn = random.choice(config['pool_images'])
+    cfg['mode'] = 'pool'
+    save_config_persist(cfg)
+    fn = random.choice(cfg['pool_images'])
     path = os.path.join(pool_dir, fn)
     threading.Thread(target=lambda: update_epaper_thread(process_image(path)), daemon=True).start()
     return jsonify(success=True)
 
 @app.route('/mode/art/set', methods=['POST'])
 def set_art_mode():
-    config['mode'] = 'art'
-    save_config()
+    cfg = load_config()
+    cfg['mode'] = 'art'
+    save_config_persist(cfg)
     return jsonify(success=True)
 
 @app.route('/mode/fit/set', methods=['POST'])
@@ -538,15 +543,16 @@ def set_fit_mode():
     if mode not in ("pad", "zoom", "stretch"):
         return jsonify(error="Invalid fit mode"), 400
 
-    config['fit_mode'] = mode
-    save_config()
+    cfg = load_config()
+    cfg['fit_mode'] = mode
+    save_config_persist(cfg)
 
     # Reprocess and re-render current image from disk
     try:
-        if config['mode'] == 'single' and config['single_image']:
-            path = os.path.join(single_dir, config['single_image'])
-        elif config['mode'] == 'pool' and config['pool_images']:
-            path = os.path.join(pool_dir, config['pool_images'][0])
+        if cfg['mode'] == 'single' and cfg['single_image']:
+            path = os.path.join(single_dir, cfg['single_image'])
+        elif cfg['mode'] == 'pool' and cfg['pool_images']:
+            path = os.path.join(pool_dir, cfg['pool_images'][0])
         else:
             return jsonify(success=True)  # nothing to render
 
@@ -561,8 +567,9 @@ def set_dither():
     data = request.get_json() or {}
     alg  = data.get('algorithm')
     if alg in ("floyd-steinberg","atkinson","shiau-fan-2","jarvis-judice-ninke","stucki","burkes"):
-        config['dithering'] = alg
-        save_config()
+        cfg = load_config()
+        cfg['dithering'] = alg
+        save_config_persist(cfg)
         # re-render current image
         if current_image is not None:
             threading.Thread(target=lambda: update_epaper_thread(current_image), daemon=True).start()
