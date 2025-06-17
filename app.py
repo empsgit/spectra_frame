@@ -47,9 +47,9 @@ def load_config():
     with open(config_path, 'r') as f:
         return json.load(f)
 
-def save_config():
+def save_config(cfg):
     with open(config_path, 'w') as f:
-        json.dump(config, f, indent=2)
+        json.dump(cfg, f, indent=2)
 
 config = load_config()
 
