@@ -99,6 +99,7 @@ def apply_dithering(image, algorithm):
     return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
 
 from lib.dither_core import atkinson_dither as cy_atkinson_dither
+from lib.error_dither_core import error_diffuse as cy_error_diffuse
 
 _palette_rgb = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 0, 0), (255, 255, 255)]
 _palette_bytes = sum(_palette_rgb, ()) + (0,) * (768 - len(_palette_rgb) * 3)
@@ -113,29 +114,10 @@ def atkinson_dither(image: Image.Image) -> Image.Image:
 
 def error_diffusion(image, kernel, divisor, anchor):
     img = np.array(image.convert("RGB"), dtype=np.float32)
-    h, w, _ = img.shape
-    kh, kw = len(kernel), len(kernel[0])
-    ax, ay = anchor
-
-    for y in range(h):
-        for x in range(w):
-            old_pixel = img[y, x]
-            new_pixel = min(_palette_rgb, key=lambda c: sum((old_pixel[i] - c[i])**2 for i in range(3)))
-            img[y, x] = new_pixel
-            error = old_pixel - new_pixel
-
-            for dy in range(kh):
-                for dx in range(kw):
-                    weight = kernel[dy][dx]
-                    if weight == 0:
-                        continue
-                    ny = y + dy - ay
-                    nx = x + dx - ax
-                    if 0 <= nx < w and 0 <= ny < h:
-                        img[ny, nx] += error * (weight / divisor)
-
-    img = np.clip(img, 0, 255).astype(np.uint8)
-    return Image.fromarray(img, mode='RGB').convert("P", palette=_palette_img, dither=Image.NONE)
+    palette = np.array(_palette_rgb, dtype=np.uint8)
+    kernel_np = np.array(kernel, dtype=np.int32)
+    output = cy_error_diffuse(img, kernel_np, divisor, anchor, palette)
+    return Image.fromarray(output, mode='RGB').convert("P", palette=_palette_img, dither=Image.NONE)
 
 def shiaufan2_dither(image):
     kernel = [
