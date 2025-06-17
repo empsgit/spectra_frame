@@ -112,31 +112,30 @@ def atkinson_dither(image: Image.Image) -> Image.Image:
     return Image.fromarray(output, mode='RGB').convert("P", palette=_palette_img, dither=Image.NONE)
 
 def error_diffusion(image, kernel, divisor, anchor):
-    img = image.convert("RGB")
-    pixels = img.load()
-    w, h = img.size
-    palette = [(255,0,0),(0,255,0),(0,0,255),(255,255,0),(0,0,0),(255,255,255)]
+    img = np.array(image.convert("RGB"), dtype=np.float32)
+    h, w, _ = img.shape
     kh, kw = len(kernel), len(kernel[0])
     ax, ay = anchor
+
     for y in range(h):
         for x in range(w):
-            old = pixels[x,y]
-            new = min(palette, key=lambda c: sum((old[i]-c[i])**2 for i in range(3)))
-            pixels[x,y] = new
-            err = tuple(old[i]-new[i] for i in range(3))
+            old_pixel = img[y, x]
+            new_pixel = min(_palette_rgb, key=lambda c: sum((old_pixel[i] - c[i])**2 for i in range(3)))
+            img[y, x] = new_pixel
+            error = old_pixel - new_pixel
+
             for dy in range(kh):
                 for dx in range(kw):
-                    val = kernel[dy][dx]
-                    if val == 0: continue
-                    nx, ny = x + dx - ax, y + dy - ay
+                    weight = kernel[dy][dx]
+                    if weight == 0:
+                        continue
+                    ny = y + dy - ay
+                    nx = x + dx - ax
                     if 0 <= nx < w and 0 <= ny < h:
-                        r,g,b = pixels[nx,ny]
-                        pixels[nx,ny] = (
-                            max(0, min(255, r + err[0]*val//divisor)),
-                            max(0, min(255, g + err[1]*val//divisor)),
-                            max(0, min(255, b + err[2]*val//divisor))
-                        )
-    return img.convert("P", palette=_palette_img, dither=Image.NONE)
+                        img[ny, nx] += error * (weight / divisor)
+
+    img = np.clip(img, 0, 255).astype(np.uint8)
+    return Image.fromarray(img, mode='RGB').convert("P", palette=_palette_img, dither=Image.NONE)
 
 def shiaufan2_dither(image):
     kernel = [
