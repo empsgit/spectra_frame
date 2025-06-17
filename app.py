@@ -47,9 +47,9 @@ def load_config():
     with open(config_path, 'r') as f:
         return json.load(f)
 
-def save_config(cfg):
+def save_config():
     with open(config_path, 'w') as f:
-        json.dump(cfg, f, indent=2)
+        json.dump(config, f, indent=2)
 
 config = load_config()
 
@@ -175,7 +175,7 @@ def display_image(image):
 
         # Update and save config with incremented update_count
         cfg['update_count'] = update_count
-        save_config(cfg)
+        save_config()
 
     return dithered
 
