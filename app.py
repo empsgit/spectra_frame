@@ -157,7 +157,7 @@ def display_image(image):
     with counter_lock:
         # Load latest config to ensure fresh update_count
         cfg = load_config()
-        update_count = cfg.get('update_count', 0) + 1
+        update_count = cfg.get('update_count', 0)
 
         # Perform full clear on every 12th update persistently
         if update_count % 12 == 0:
@@ -174,7 +174,7 @@ def display_image(image):
         epd.sleep()
 
         # Update and save config with incremented update_count
-        cfg['update_count'] = update_count
+        cfg['update_count'] = update_count + 1
         save_config_persist(cfg)
 
     return dithered
