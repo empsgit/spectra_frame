@@ -155,26 +155,34 @@ update_counter = 0
 counter_lock = threading.Lock()
 
 def display_image(image):
-    global update_counter
     with counter_lock:
-        update_counter += 1
-        count = update_counter
+        # Load latest config to ensure fresh update_count
+        cfg = load_config()
+        update_count = cfg.get('update_count', 0) + 1
 
-    # On every 10th update, do a full clear first
-    if count % 5 == 0:
+        # Perform full clear on every 12th update persistently
+        if update_count % 12 == 0:
+            epd.Init()
+            epd.Clear()
+            epd.sleep()
+
+        # Update image normally
         epd.Init()
-        epd.Clear()
+        img = ImageOps.fit(image, get_target_size(), method=Image.Resampling.LANCZOS)
+        dithered = apply_dithering(img, cfg['dithering'])
+        buf = epd.getbuffer(dithered)
+        epd.display(buf)
         epd.sleep()
 
-    # Standard update
-    epd.Init()
-    img = ImageOps.fit(image, get_target_size(), method=Image.Resampling.LANCZOS)
-    dithered = apply_dithering(img, config['dithering'])
-    buf = epd.getbuffer(dithered)
-    epd.display(buf)
-    epd.sleep()
+        # Update and save config with incremented update_count
+        cfg['update_count'] = update_count
+        save_config_persist(cfg)
 
     return dithered
+
+def save_config_persist(cfg):
+    with open(config_path, 'w') as f:
+        json.dump(cfg, f, indent=2)
 
 def clear_screen():
     """Force a full clear + sleep in a background thread."""
@@ -314,7 +322,6 @@ INDEX_HTML = """
       <option value="floyd-steinberg">Floyd–Steinberg</option>
       <option value="atkinson">Atkinson</option>
       <option value="shiau-fan-2">Shiau-Fan 2</option>
-      <option value="jarvis-judice-ninke">Jarvis–Judice–Ninke</option>
       <option value="stucki">Stucki</option>
       <option value="burkes">Burkes</option>
     </select>
