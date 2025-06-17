@@ -151,7 +151,6 @@ def burkes_dither(image):
     return error_diffusion(image, kernel, divisor=32, anchor=(2,0))
 
 # ==== Image process & display ====
-update_counter = 0
 counter_lock = threading.Lock()
 
 def display_image(image):
@@ -176,13 +175,10 @@ def display_image(image):
 
         # Update and save config with incremented update_count
         cfg['update_count'] = update_count
-        save_config_persist(cfg)
+        save_config(cfg)
 
     return dithered
 
-def save_config_persist(cfg):
-    with open(config_path, 'w') as f:
-        json.dump(cfg, f, indent=2)
 
 def clear_screen():
     """Force a full clear + sleep in a background thread."""
