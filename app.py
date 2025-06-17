@@ -594,7 +594,8 @@ def rotate():
 @app.route('/config', methods=['GET'])
 def get_config():
     # return the live config object
-    return jsonify(config)
+    cfg = load_config()
+    return jsonify(cfg)
 
 @app.route('/clear', methods=['POST'])
 def clear_endpoint():
