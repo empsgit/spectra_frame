@@ -175,10 +175,12 @@ def display_image(image):
 
         # Update and save config with incremented update_count
         cfg['update_count'] = update_count
-        save_config()
+        save_config_persist(cfg)
 
     return dithered
-
+def save_config_persist(cfg):
+    with open(config_path, 'w') as f:
+        json.dump(cfg, f, indent=2)
 
 def clear_screen():
     """Force a full clear + sleep in a background thread."""
