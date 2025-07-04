@@ -10,6 +10,7 @@ import json
 import random
 import numpy as np
 import numba as nb
+import RPi.GPIO as GPIO
 
 from flask import Flask, request, render_template_string, jsonify
 from werkzeug.utils import secure_filename
@@ -27,6 +28,10 @@ picdir      = os.path.join(BASE_DIR, 'pic')
 single_dir  = os.path.join(picdir, 'single')
 pool_dir    = os.path.join(picdir, 'pool')
 config_path = os.path.join(BASE_DIR, 'config.json')
+
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(16, GPIO.OUT, initial=GPIO.LOW)
+
 
 os.makedirs(single_dir, exist_ok=True)
 os.makedirs(pool_dir, exist_ok=True)
@@ -219,7 +224,7 @@ def process_image(path_or_file):
 
     # Optional enhancements
     img = ImageOps.autocontrast(img)
-    img = ImageEnhance.Color(img).enhance(3.0)
+    img = ImageEnhance.Color(img).enhance(2.5)
     return img
 
 current_image = None
@@ -257,7 +262,7 @@ threading.Thread(target=initial_display, daemon=True).start()
 # ==== Flask & inactivity ====
 app = Flask(__name__)
 last_activity = time.time()
-TIMEOUT = 20*60
+TIMEOUT = 10*60
 
 @app.before_request
 def touch():
@@ -268,7 +273,10 @@ def watchdog():
     while True:
         time.sleep(60)
         if time.time()-last_activity>TIMEOUT:
-            os.system("sudo restart now")
+            GPIO.output(16, GPIO.HIGH)
+            time.sleep(1)
+            GPIO.cleanup()  
+            os.system("sudo shutdown now")
             break
 
 threading.Thread(target=watchdog, daemon=True).start()
