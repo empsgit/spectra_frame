@@ -274,7 +274,7 @@ def watchdog():
         time.sleep(60)
         if time.time()-last_activity>TIMEOUT:
             GPIO.output(16, GPIO.HIGH)
-            time.sleep(1)
+            time.sleep(10)
             GPIO.cleanup()  
             os.system("sudo shutdown now")
             break
