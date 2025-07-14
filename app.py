@@ -32,7 +32,7 @@ config_path = os.path.join(BASE_DIR, 'config.json')
 GPIO.setwarnings(False)  # to suppress GPIO warnings
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(16, GPIO.OUT, initial=GPIO.LOW)
-
+epd_lock = threading.Lock()
 
 os.makedirs(single_dir, exist_ok=True)
 os.makedirs(pool_dir, exist_ok=True)
@@ -160,29 +160,30 @@ def burkes_dither(image):
 counter_lock = threading.Lock()
 
 def display_image(image):
-    with counter_lock:
-        # Load latest config to ensure fresh update_count
-        cfg = load_config()
-        update_count = cfg.get('update_count', 0)
+    global update_counter
 
-        # Perform full clear on every 12th update persistently
-        if update_count % 12 == 0:
+    with counter_lock:
+        update_counter += 1
+        count = update_counter
+
+    target_size = get_target_size()
+    img = ImageOps.fit(image, target_size, method=Image.Resampling.LANCZOS)
+    dithered = apply_dithering(img, config['dithering'])
+    buf = epd.getbuffer(dithered)
+
+    with epd_lock:
+        # On every 10th update, do a full clear first
+        if count % 5 == 0:
+            print("Performing full clear before update.")
             epd.Init()
             epd.Clear()
             epd.sleep()
-            update_count = 0    
 
-        # Update image normally
+        print("Starting standard update.")
         epd.Init()
-        img = ImageOps.fit(image, get_target_size(), method=Image.Resampling.LANCZOS)
-        dithered = apply_dithering(img, cfg['dithering'])
-        buf = epd.getbuffer(dithered)
         epd.display(buf)
         epd.sleep()
-
-        # Update and save config with incremented update_count
-        cfg['update_count'] = update_count + 1
-        save_config_persist(cfg)
+        print("Standard update complete.")
 
     return dithered
 def save_config_persist(cfg):
@@ -192,9 +193,12 @@ def save_config_persist(cfg):
 def clear_screen():
     """Force a full clear + sleep in a background thread."""
     def _clear():
-        epd.Init()
-        epd.Clear()
-        epd.sleep()
+        with epd_lock:
+            print("Starting forced clear.")
+            epd.Init()
+            epd.Clear()
+            epd.sleep()
+            print("Forced clear completed.")
     threading.Thread(target=_clear, daemon=True).start()
 
 def process_image(path_or_file):
@@ -619,5 +623,14 @@ def clear_endpoint():
     return jsonify(success=True)
 
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=80)
+try:
+    if __name__ == '__main__':
+        app.run(host='0.0.0.0', port=80)
+except KeyboardInterrupt:
+    print("Exiting gracefully...")
+finally:
+    with epd_lock:
+        epd.Init()
+        epd.Clear()
+        epd.sleep()
+    GPIO.cleanup()
