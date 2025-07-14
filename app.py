@@ -33,6 +33,8 @@ GPIO.setwarnings(False)  # to suppress GPIO warnings
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(16, GPIO.OUT, initial=GPIO.LOW)
 epd_lock = threading.Lock()
+update_counter = 0
+counter_lock = threading.Lock()
 
 os.makedirs(single_dir, exist_ok=True)
 os.makedirs(pool_dir, exist_ok=True)
@@ -157,7 +159,6 @@ def burkes_dither(image):
     return error_diffusion(image, kernel, divisor=32, anchor=(2,0))
 
 # ==== Image process & display ====
-counter_lock = threading.Lock()
 
 def display_image(image):
     global update_counter
