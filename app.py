@@ -29,6 +29,7 @@ single_dir  = os.path.join(picdir, 'single')
 pool_dir    = os.path.join(picdir, 'pool')
 config_path = os.path.join(BASE_DIR, 'config.json')
 
+GPIO.setwarnings(False)  # to suppress GPIO warnings
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(16, GPIO.OUT, initial=GPIO.LOW)
 
@@ -270,14 +271,20 @@ def touch():
     last_activity = time.time()
 
 def watchdog():
+    global last_activity
     while True:
         time.sleep(60)
-        if time.time()-last_activity>TIMEOUT:
-            GPIO.output(16, GPIO.HIGH)
-            time.sleep(10)
-            GPIO.cleanup()  
-            os.system("sudo shutdown now")
-            break
+        if time.time() - last_activity > TIMEOUT:
+            try:
+                print("Timeout reached, initiating shutdown sequence...")
+                GPIO.output(16, GPIO.HIGH)  # Signal to power controller
+                time.sleep(10)  # Reduced to 1 second as per your original request
+            except Exception as e:
+                print(f"GPIO Error during shutdown: {e}")
+            finally:
+                GPIO.cleanup()  # Always cleanup GPIO
+                os.system("sudo shutdown now")
+                break
 
 threading.Thread(target=watchdog, daemon=True).start()
 
