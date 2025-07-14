@@ -185,6 +185,9 @@ def display_image(image):
         epd.display(buf)
         epd.sleep()
         print("Standard update complete.")
+    except Exception as e:
+        print("EPD update error:", e)
+        return None    
 
     return dithered
 def save_config_persist(cfg):
