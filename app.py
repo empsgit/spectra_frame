@@ -631,14 +631,5 @@ def clear_endpoint():
     return jsonify(success=True)
 
 
-try:
-    if __name__ == '__main__':
-        app.run(host='0.0.0.0', port=80)
-except KeyboardInterrupt:
-    print("Exiting gracefully...")
-finally:
-    with epd_lock:
-        epd.Init()
-        epd.Clear()
-        epd.sleep()
-    GPIO.cleanup()
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=80)
