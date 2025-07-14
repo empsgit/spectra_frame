@@ -163,33 +163,37 @@ def burkes_dither(image):
 def display_image(image):
     global update_counter
 
-    with counter_lock:
-        update_counter += 1
-        count = update_counter
+    try:
+        with counter_lock:
+            update_counter += 1
+            count = update_counter
 
-    target_size = get_target_size()
-    img = ImageOps.fit(image, target_size, method=Image.Resampling.LANCZOS)
-    dithered = apply_dithering(img, config['dithering'])
-    buf = epd.getbuffer(dithered)
+        target_size = get_target_size()
+        img = ImageOps.fit(image, target_size, method=Image.Resampling.LANCZOS)
+        dithered = apply_dithering(img, config['dithering'])
+        buf = epd.getbuffer(dithered)
 
-    with epd_lock:
-        # On every 10th update, do a full clear first
-        if count % 5 == 0:
-            print("Performing full clear before update.")
+        with epd_lock:
+            if count % 5 == 0:
+                print("Performing full clear before update.")
+                epd.Init()
+                epd.Clear()
+                epd.sleep()
+
+            print("Starting standard update.")
             epd.Init()
-            epd.Clear()
+            epd.display(buf)
             epd.sleep()
+            print("Standard update complete.")
 
-        print("Starting standard update.")
-        epd.Init()
-        epd.display(buf)
-        epd.sleep()
-        print("Standard update complete.")
+        return dithered
+
     except Exception as e:
         print("EPD update error:", e)
-        return None    
-
-    return dithered
+        import traceback
+        traceback.print_exc()  # Optional: full stack trace
+        return None
+        
 def save_config_persist(cfg):
     with open(config_path, 'w') as f:
         json.dump(cfg, f, indent=2)
