@@ -62,9 +62,10 @@ config = load_config()
 epd = epd13in3E.EPD()
 try:
     epd.Init()
+    time.sleep(1)
 #    epd.Clear()
     epd.sleep()
-    time.sleep(2)
+    time.sleep(1)
 except Exception as e:
     print("EPD init error:", e)
 
@@ -168,18 +169,24 @@ def display_image(image):
         # Perform full clear on every 12th update persistently
         if update_count % 12 == 0:
             epd.Init()
+            time.sleep(1)
             epd.Clear()
+            time.sleep(1)
             epd.sleep()
-            time.sleep(2)
-            update_count = 0    
+            time.sleep(1)
+                        update_count = 0    
 
         # Update image normally
         epd.Init()
+        time.sleep(1)
         img = ImageOps.fit(image, get_target_size(), method=Image.Resampling.LANCZOS)
         dithered = apply_dithering(img, cfg['dithering'])
         buf = epd.getbuffer(dithered)
         epd.display(buf)
+        time.sleep(1)
         epd.sleep()
+        time.sleep(1)
+
 
         # Update and save config with incremented update_count
         cfg['update_count'] = update_count + 1
@@ -194,9 +201,11 @@ def clear_screen():
     """Force a full clear + sleep in a background thread."""
     def _clear():
         epd.Init()
+        time.sleep(1)
         epd.Clear()
+        time.sleep(1)
         epd.sleep()
-        time.sleep(2)
+        time.sleep(1)
     threading.Thread(target=_clear, daemon=True).start()
 
 def process_image(path_or_file):
