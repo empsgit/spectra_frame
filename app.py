@@ -29,12 +29,9 @@ single_dir  = os.path.join(picdir, 'single')
 pool_dir    = os.path.join(picdir, 'pool')
 config_path = os.path.join(BASE_DIR, 'config.json')
 
-GPIO.setwarnings(False)  # to suppress GPIO warnings
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(16, GPIO.OUT, initial=GPIO.LOW)
-epd_lock = threading.Lock()
-update_counter = 0
-counter_lock = threading.Lock()
+
 
 os.makedirs(single_dir, exist_ok=True)
 os.makedirs(pool_dir, exist_ok=True)
@@ -67,6 +64,7 @@ try:
     epd.Init()
 #    epd.Clear()
     epd.sleep()
+    time.sleep(2)
 except Exception as e:
     print("EPD init error:", e)
 
@@ -159,41 +157,35 @@ def burkes_dither(image):
     return error_diffusion(image, kernel, divisor=32, anchor=(2,0))
 
 # ==== Image process & display ====
+counter_lock = threading.Lock()
 
 def display_image(image):
-    global update_counter
+    with counter_lock:
+        # Load latest config to ensure fresh update_count
+        cfg = load_config()
+        update_count = cfg.get('update_count', 0)
 
-    try:
-        with counter_lock:
-            update_counter += 1
-            count = update_counter
-
-        target_size = get_target_size()
-        img = ImageOps.fit(image, target_size, method=Image.Resampling.LANCZOS)
-        dithered = apply_dithering(img, config['dithering'])
-        buf = epd.getbuffer(dithered)
-
-        with epd_lock:
-            if count % 5 == 0:
-                print("Performing full clear before update.")
-                epd.Init()
-                epd.Clear()
-                epd.sleep()
-
-            print("Starting standard update.")
-            epd.Init()
-            epd.display(buf)
+        # Perform full clear on every 12th update persistently
+        if update_count % 12 == 0:
+        #    epd.Init()
+            epd.Clear()
             epd.sleep()
-            print("Standard update complete.")
+            time.sleep(2)
+            update_count = 0    
 
-        return dithered
+        # Update image normally
+        #epd.Init()
+        img = ImageOps.fit(image, get_target_size(), method=Image.Resampling.LANCZOS)
+        dithered = apply_dithering(img, cfg['dithering'])
+        buf = epd.getbuffer(dithered)
+        epd.display(buf)
+        epd.sleep()
 
-    except Exception as e:
-        print("EPD update error:", e)
-        import traceback
-        traceback.print_exc()  # Optional: full stack trace
-        return None
-        
+        # Update and save config with incremented update_count
+        cfg['update_count'] = update_count + 1
+        save_config_persist(cfg)
+
+    return dithered
 def save_config_persist(cfg):
     with open(config_path, 'w') as f:
         json.dump(cfg, f, indent=2)
@@ -201,12 +193,10 @@ def save_config_persist(cfg):
 def clear_screen():
     """Force a full clear + sleep in a background thread."""
     def _clear():
-        with epd_lock:
-            print("Starting forced clear.")
-            epd.Init()
-            epd.Clear()
-            epd.sleep()
-            print("Forced clear completed.")
+    #    epd.Init()
+        epd.Clear()
+        epd.sleep()
+        time.sleep(2)
     threading.Thread(target=_clear, daemon=True).start()
 
 def process_image(path_or_file):
@@ -283,20 +273,13 @@ def touch():
     last_activity = time.time()
 
 def watchdog():
-    global last_activity
     while True:
         time.sleep(60)
-        if time.time() - last_activity > TIMEOUT:
-            try:
-                print("Timeout reached, initiating shutdown sequence...")
-                GPIO.output(16, GPIO.HIGH)  # Signal to power controller
-                time.sleep(10)  # Reduced to 1 second as per your original request
-            except Exception as e:
-                print(f"GPIO Error during shutdown: {e}")
-            finally:
-                GPIO.cleanup()  # Always cleanup GPIO
-                os.system("sudo shutdown now")
-                break
+        if time.time()-last_activity>TIMEOUT:
+            GPIO.output(16, GPIO.HIGH)
+            time.sleep(10)
+            os.system("sudo shutdown now")
+            break
 
 threading.Thread(target=watchdog, daemon=True).start()
 
