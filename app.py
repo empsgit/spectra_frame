@@ -174,7 +174,7 @@ def display_image(image):
             time.sleep(1)
             epd.sleep()
             time.sleep(1)
-                        update_count = 0    
+            update_count = 0    
 
         # Update image normally
         epd.Init()
