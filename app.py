@@ -65,7 +65,7 @@ try:
     time.sleep(2)
 #    epd.Clear()
     epd.sleep()
-    time.sleep(5)
+    time.sleep(2)
 except Exception as e:
     print("EPD init error:", e)
 
@@ -173,7 +173,7 @@ def display_image(image):
             epd.Clear()
             time.sleep(2)
             epd.sleep()
-            time.sleep(5)
+            time.sleep(2)
             update_count = 0    
 
         # Update image normally
@@ -182,11 +182,10 @@ def display_image(image):
         img = ImageOps.fit(image, get_target_size(), method=Image.Resampling.LANCZOS)
         dithered = apply_dithering(img, cfg['dithering'])
         buf = epd.getbuffer(dithered)
-        time.sleep(2)
         epd.display(buf)
         time.sleep(2)
         epd.sleep()
-        time.sleep(5)
+        time.sleep(2)
 
 
         # Update and save config with incremented update_count
@@ -206,7 +205,7 @@ def clear_screen():
         epd.Clear()
         time.sleep(2)
         epd.sleep()
-        time.sleep(5)
+        time.sleep(2)
     threading.Thread(target=_clear, daemon=True).start()
 
 def process_image(path_or_file):
@@ -381,7 +380,7 @@ function pollPreview() {
         document.getElementById('preview').src = "data:image/png;base64," + data.rendered_image;
         showMsg("Rendering complete!", "success");
       } else {
-        setTimeout(pollPreview, 10000); 
+        setTimeout(pollPreview, 3000); 
       }
     })
     .catch(e => showMsg("Error fetching preview: " + e, "danger"));
