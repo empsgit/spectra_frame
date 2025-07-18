@@ -61,11 +61,12 @@ config = load_config()
 # ==== E-Paper Setup ====
 epd = epd13in3E.EPD()
 try:
+    time.sleep(5)
     epd.Init()
     time.sleep(2)
 #    epd.Clear()
     epd.sleep()
-    time.sleep(2)
+    time.sleep(5)
 except Exception as e:
     print("EPD init error:", e)
 
@@ -168,6 +169,7 @@ def display_image(image):
 
         # Perform full clear on every 12th update persistently
         if update_count % 12 == 0:
+            time.sleep(2)
             epd.Init()
             time.sleep(2)
             epd.Clear()
@@ -177,6 +179,7 @@ def display_image(image):
             update_count = 0    
 
         # Update image normally
+        time.sleep(2)
         epd.Init()
         time.sleep(2)
         img = ImageOps.fit(image, get_target_size(), method=Image.Resampling.LANCZOS)
@@ -200,6 +203,7 @@ def save_config_persist(cfg):
 def clear_screen():
     """Force a full clear + sleep in a background thread."""
     def _clear():
+        time.sleep(2)
         epd.Init()
         time.sleep(2)
         epd.Clear()
