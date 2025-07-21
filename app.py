@@ -61,8 +61,9 @@ config = load_config()
 # ==== E-Paper Setup ====
 epd = epd13in3E.EPD()
 try:
+    time.sleep(20)
     epd.Init()
-    time.sleep(2)
+    time.sleep(5)
 #    epd.Clear()
     epd.sleep()
     time.sleep(5)
@@ -168,24 +169,26 @@ def display_image(image):
 
         # Perform full clear on every 12th update persistently
         if update_count % 12 == 0:
+            time.sleep(5)
             epd.Init()
-            time.sleep(2)
+            time.sleep(5)
             epd.Clear()
-            time.sleep(2)
+            time.sleep(5)
             epd.sleep()
-            time.sleep(2)
+            time.sleep(5)
             update_count = 0    
 
         # Update image normally
+        time.sleep(5)
         epd.Init()
-        time.sleep(2)
+        time.sleep(5)
         img = ImageOps.fit(image, get_target_size(), method=Image.Resampling.LANCZOS)
         dithered = apply_dithering(img, cfg['dithering'])
         buf = epd.getbuffer(dithered)
         epd.display(buf)
-        time.sleep(2)
+        time.sleep(5)
         epd.sleep()
-        time.sleep(2)
+        time.sleep(5)
 
 
         # Update and save config with incremented update_count
@@ -201,11 +204,11 @@ def clear_screen():
     """Force a full clear + sleep in a background thread."""
     def _clear():
         epd.Init()
-        time.sleep(2)
+        time.sleep(5)
         epd.Clear()
-        time.sleep(2)
+        time.sleep(5)
         epd.sleep()
-        time.sleep(2)
+        time.sleep(5)
     threading.Thread(target=_clear, daemon=True).start()
 
 def process_image(path_or_file):
@@ -286,7 +289,7 @@ def watchdog():
         time.sleep(60)
         if time.time()-last_activity>TIMEOUT:
             GPIO.output(16, GPIO.HIGH)
-            time.sleep(10)
+            time.sleep(15)
             os.system("sudo shutdown now")
             break
 
