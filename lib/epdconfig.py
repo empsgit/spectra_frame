@@ -69,7 +69,7 @@ for find_dir in find_dirs:
         spi = CDLL(so_filename)
         break
 if spi is None:
-    RuntimeError('Cannot find DEV_Config.so')
+    raise RuntimeError('Cannot find DEV_Config.so')
 
 def digital_write(pin, value):
     spi.DEV_Digital_Write(pin, value)

@@ -83,9 +83,13 @@ class EPD():
     def SendData2(self, buf, Len):
         epdconfig.spi_writebyte2(buf, Len)
 
-    def ReadBusyH(self):
+    def ReadBusyH(self, timeout_s=120):
         print("e-Paper busy H")
+        start = time.time()
         while(epdconfig.digital_read(self.EPD_BUSY_PIN) == 0):      # 0: busy, 1: idle
+            if time.time() - start > timeout_s:
+                print("e-Paper busy H TIMEOUT after %ds" % timeout_s)
+                raise TimeoutError("EPD busy pin stuck LOW for %ds" % timeout_s)
             epdconfig.delay_ms(5)
         print("e-Paper busy H release")
 
