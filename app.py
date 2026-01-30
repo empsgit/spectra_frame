@@ -8,8 +8,8 @@ import io
 import base64
 import json
 import random
+import queue
 import numpy as np
-import numba as nb
 import RPi.GPIO as GPIO
 
 from flask import Flask, request, render_template_string, jsonify
@@ -41,6 +41,7 @@ default_config = {
     "single_image":  "",
     "pool_images":   [],
     "dithering":     "floyd-steinberg",
+    "update_count":  0,
     "fit_mode":      "pad"  # pad | zoom | stretch
 }
 
@@ -52,9 +53,9 @@ def load_config():
     with open(config_path, 'r') as f:
         return json.load(f)
 
-def save_config():
+def save_config_persist(cfg):
     with open(config_path, 'w') as f:
-        json.dump(config, f, indent=2)
+        json.dump(cfg, f, indent=2)
 
 config = load_config()
 
@@ -73,19 +74,16 @@ except Exception as e:
 def get_target_size():
     return (max(epd.width, epd.height), min(epd.width, epd.height))
 
-# prepare palette
-_custom_palette = [
-    255,0,0,    # red
-    0,255,0,    # green
-    0,0,255,    # blue
-    255,255,0,  # yellow
-    0,0,0,      # black
-    255,255,255 # white
-] + [0] * (768 - 6*3)
-_palette_img = Image.new("P",(1,1))
-_palette_img.putpalette(_custom_palette)
+# ==== Palette ====
+_palette_rgb = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 0, 0), (255, 255, 255)]
+_palette_bytes = sum(_palette_rgb, ()) + (0,) * (768 - len(_palette_rgb) * 3)
+_palette_img = Image.new("P", (1, 1))
+_palette_img.putpalette(_palette_bytes)
 
 # ==== Dithering Algorithms ====
+
+from lib.dither_core import atkinson_dither as cy_atkinson_dither
+from lib.error_dither_core import error_diffuse as cy_error_diffuse
 
 def apply_dithering(image, algorithm):
     """
@@ -97,22 +95,12 @@ def apply_dithering(image, algorithm):
         return atkinson_dither(image)
     if algorithm == "shiau-fan-2":
         return shiaufan2_dither(image)
-#    if algorithm == "jarvis-judice-ninke":
-#        return jarvis_judice_ninke_dither(image)
     if algorithm == "stucki":
         return stucki_dither(image)
     if algorithm == "burkes":
         return burkes_dither(image)
     # fallback
     return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
-
-from lib.dither_core import atkinson_dither as cy_atkinson_dither
-from lib.error_dither_core import error_diffuse as cy_error_diffuse
-
-_palette_rgb = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 0, 0), (255, 255, 255)]
-_palette_bytes = sum(_palette_rgb, ()) + (0,) * (768 - len(_palette_rgb) * 3)
-_palette_img = Image.new("P", (1, 1))
-_palette_img.putpalette(_palette_bytes)
 
 def atkinson_dither(image: Image.Image) -> Image.Image:
     img = np.array(image.convert("RGB"), dtype=np.float32)
@@ -135,14 +123,6 @@ def shiaufan2_dither(image):
     ]
     return error_diffusion(image, kernel, divisor=42, anchor=(0,0))
 
-#def jarvis_judice_ninke_dither(image):
-#    kernel = [
-#        [0,0,   7,   5,   3],
-#        [3,5,   7,   5,   3],
-#        [1,3,   5,   3,   1]
-#    ]
-#    return error_diffusion(image, kernel, divisor=48, anchor=(2,0))
-
 def stucki_dither(image):
     kernel = [
         [0,0,   8,   4,   2],
@@ -158,67 +138,15 @@ def burkes_dither(image):
     ]
     return error_diffusion(image, kernel, divisor=32, anchor=(2,0))
 
-# ==== Image process & display ====
-counter_lock = threading.Lock()
-
-def display_image(image):
-    with counter_lock:
-        # Load latest config to ensure fresh update_count
-        cfg = load_config()
-        update_count = cfg.get('update_count', 0)
-
-        # Perform full clear on every 12th update persistently
-        if update_count % 12 == 0:
-            time.sleep(5)
-            epd.Init()
-            time.sleep(5)
-            epd.Clear()
-            time.sleep(5)
-            epd.sleep()
-            time.sleep(5)
-            update_count = 0    
-
-        # Update image normally
-        time.sleep(5)
-        epd.Init()
-        time.sleep(5)
-        img = ImageOps.fit(image, get_target_size(), method=Image.Resampling.LANCZOS)
-        dithered = apply_dithering(img, cfg['dithering'])
-        buf = epd.getbuffer(dithered)
-        epd.display(buf)
-        time.sleep(5)
-        epd.sleep()
-        time.sleep(5)
-
-
-        # Update and save config with incremented update_count
-        cfg['update_count'] = update_count + 1
-        save_config_persist(cfg)
-
-    return dithered
-def save_config_persist(cfg):
-    with open(config_path, 'w') as f:
-        json.dump(cfg, f, indent=2)
-
-def clear_screen():
-    """Force a full clear + sleep in a background thread."""
-    def _clear():
-        epd.Init()
-        time.sleep(5)
-        epd.Clear()
-        time.sleep(5)
-        epd.sleep()
-        time.sleep(5)
-    threading.Thread(target=_clear, daemon=True).start()
+# ==== Image processing ====
 
 def process_image(path_or_file):
     img = Image.open(path_or_file).convert("RGB")
     img = ImageOps.exif_transpose(img)
     if img.height > img.width:
         img = img.rotate(270, expand=True)
-    img = img.rotate(0, expand=True)
 
-    fit_mode = config.get("fit_mode", "pad")
+    fit_mode = load_config().get("fit_mode", "pad")
     target = get_target_size()
 
     if fit_mode == "stretch":
@@ -242,37 +170,125 @@ def process_image(path_or_file):
     img = ImageEnhance.Color(img).enhance(2.5)
     return img
 
-current_image = None
+# ==== Display Worker (single thread + queue) ====
+_display_queue = queue.Queue()
+
+current_source_image = None   # original RGB image (before dithering)
 rendered_data = None
 rendering_complete = False
 
-def update_epaper_thread(image):
-    global current_image, rendered_data, rendering_complete
+def _do_display_update(image):
+    """Handles EPD init/display/sleep cycle. Runs in the display worker thread."""
+    global current_source_image, rendered_data, rendering_complete
     try:
-        d = display_image(image)
-        current_image = d
-        buf = io.BytesIO()
-        d.rotate(180).save(buf, format="PNG")
-        rendered_data = base64.b64encode(buf.getvalue()).decode('utf-8')
+        # Load latest config to ensure fresh update_count
+        cfg = load_config()
+        update_count = cfg.get('update_count', 0)
+
+        # Perform full clear on every 12th update
+        if update_count % 12 == 0:
+            time.sleep(5)
+            epd.Init()
+            time.sleep(5)
+            epd.Clear()
+            time.sleep(5)
+            epd.sleep()
+            time.sleep(5)
+            update_count = 0
+
+        # Update image normally
+        time.sleep(5)
+        epd.Init()
+        time.sleep(5)
+        try:
+            dithered = apply_dithering(image, cfg['dithering'])
+            buf = epd.getbuffer(dithered)
+            epd.display(buf)
+            time.sleep(5)
+        finally:
+            epd.sleep()
+            time.sleep(5)
+
+        # Update and save config with incremented update_count
+        cfg['update_count'] = update_count + 1
+        save_config_persist(cfg)
+
+        current_source_image = image
+        buf_io = io.BytesIO()
+        dithered.rotate(180).save(buf_io, format="PNG")
+        rendered_data = base64.b64encode(buf_io.getvalue()).decode('utf-8')
         rendering_complete = True
     except Exception as e:
         print("EPD update error:", e)
         rendering_complete = False
 
+def _do_clear():
+    """Handles EPD clear cycle. Runs in the display worker thread."""
+    try:
+        epd.Init()
+        time.sleep(5)
+        epd.Clear()
+        time.sleep(5)
+    except Exception as e:
+        print("EPD clear error:", e)
+    finally:
+        try:
+            epd.sleep()
+            time.sleep(5)
+        except Exception:
+            pass
+
+def _display_worker():
+    """Single worker thread that processes display tasks sequentially."""
+    while True:
+        task = _display_queue.get()
+        # Drain queue, keep only the latest task
+        while not _display_queue.empty():
+            try:
+                task = _display_queue.get_nowait()
+            except queue.Empty:
+                break
+        try:
+            action = task[0]
+            if action == 'display':
+                _do_display_update(task[1])
+            elif action == 'display_path':
+                _do_display_update(process_image(task[1]))
+            elif action == 'clear':
+                _do_clear()
+        except Exception as e:
+            print("Display worker error:", e)
+
+threading.Thread(target=_display_worker, daemon=True).start()
+
+def submit_display(image):
+    """Submit a pre-processed RGB image for dithering and display."""
+    global rendering_complete
+    rendering_complete = False
+    _display_queue.put(('display', image))
+
+def submit_display_path(path):
+    """Submit an image file path for processing, dithering and display."""
+    global rendering_complete
+    rendering_complete = False
+    _display_queue.put(('display_path', path))
+
+def submit_clear():
+    """Submit a clear-screen task."""
+    _display_queue.put(('clear',))
+
 def initial_display():
-    m = config['mode']
-    if m == 'single' and config['single_image']:
-        #p = os.path.join(single_dir, config['single_image'])
-        #if os.path.exists(p):
-            #update_epaper_thread(process_image(p))
-        return    
-    elif m == 'pool' and config['pool_images']:
-        fn = random.choice(config['pool_images'])
+    cfg = load_config()
+    m = cfg['mode']
+    if m == 'single' and cfg['single_image']:
+        return
+    elif m == 'pool' and cfg['pool_images']:
+        fn = random.choice(cfg['pool_images'])
         p = os.path.join(pool_dir, fn)
         if os.path.exists(p):
-            update_epaper_thread(process_image(p))
+            submit_display_path(p)
 
-threading.Thread(target=initial_display, daemon=True).start()
+initial_display()
 
 # ==== Flask & inactivity ====
 app = Flask(__name__)
@@ -383,7 +399,7 @@ function pollPreview() {
         document.getElementById('preview').src = "data:image/png;base64," + data.rendered_image;
         showMsg("Rendering complete!", "success");
       } else {
-        setTimeout(pollPreview, 3000); 
+        setTimeout(pollPreview, 3000);
       }
     })
     .catch(e => showMsg("Error fetching preview: " + e, "danger"));
@@ -482,8 +498,6 @@ pollPreview();
 
 # ==== Flask Endpoints ====
 
-app = Flask(__name__)
-
 @app.route('/', methods=['GET'])
 def index():
     return render_template_string(INDEX_HTML)
@@ -507,7 +521,7 @@ def set_single():
     cfg['mode'] = 'single'
     cfg['single_image'] = fn
     save_config_persist(cfg)  # save immediately
-    threading.Thread(target=lambda: update_epaper_thread(process_image(path)), daemon=True).start()
+    submit_display_path(path)
     return jsonify(success=True)
 
 @app.route('/mode/pool/add', methods=['POST'])
@@ -525,7 +539,7 @@ def pool_add():
 
 @app.route('/pool/list', methods=['GET'])
 def pool_list():
-    return jsonify(config.get('pool_images', []))
+    return jsonify(load_config().get('pool_images', []))
 
 @app.route('/mode/pool/remove', methods=['POST'])
 def pool_remove():
@@ -534,7 +548,7 @@ def pool_remove():
     cfg = load_config()
     if fn in cfg['pool_images']:
         cfg['pool_images'].remove(fn)
-        save_config()
+        save_config_persist(cfg)
         p = os.path.join(pool_dir, fn)
         if os.path.exists(p):
             os.remove(p)
@@ -549,7 +563,7 @@ def set_pool_mode():
     save_config_persist(cfg)
     fn = random.choice(cfg['pool_images'])
     path = os.path.join(pool_dir, fn)
-    threading.Thread(target=lambda: update_epaper_thread(process_image(path)), daemon=True).start()
+    submit_display_path(path)
     return jsonify(success=True)
 
 @app.route('/mode/art/set', methods=['POST'])
@@ -579,8 +593,7 @@ def set_fit_mode():
         else:
             return jsonify(success=True)  # nothing to render
 
-        image = process_image(path)
-        threading.Thread(target=lambda: update_epaper_thread(image), daemon=True).start()
+        submit_display_path(path)
         return jsonify(success=True)
     except Exception as e:
         return jsonify(error=str(e)), 500
@@ -593,23 +606,22 @@ def set_dither():
         cfg = load_config()
         cfg['dithering'] = alg
         save_config_persist(cfg)
-        # re-render current image
-        if current_image is not None:
-            threading.Thread(target=lambda: update_epaper_thread(current_image), daemon=True).start()
+        # re-render current image with new dithering
+        if current_source_image is not None:
+            submit_display(current_source_image)
         return jsonify(success=True)
     return jsonify(error="Invalid algorithm"), 400
 
 @app.route('/rotate', methods=['GET'])
 def rotate():
     global rendering_complete
-    if current_image is None:
+    if current_source_image is None:
         return jsonify(error="No image to rotate"), 400
     try:
-        res = getattr(Image.Resampling, "LANCZOS", Image.LANCZOS)
-        rot = current_image.rotate(90, expand=True)
-        rot = ImageOps.fit(rot, get_target_size(), method=res)
+        rot = current_source_image.rotate(90, expand=True)
+        rot = ImageOps.fit(rot, get_target_size(), method=Image.Resampling.LANCZOS)
         rendering_complete = False
-        threading.Thread(target=lambda: update_epaper_thread(rot), daemon=True).start()
+        submit_display(rot)
         return jsonify(success=True)
     except Exception as e:
         return jsonify(error=str(e)), 500
@@ -622,7 +634,7 @@ def get_config():
 
 @app.route('/clear', methods=['POST'])
 def clear_endpoint():
-    clear_screen()
+    submit_clear()
     return jsonify(success=True)
 
 
