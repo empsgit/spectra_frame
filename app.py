@@ -62,12 +62,11 @@ config = load_config()
 # ==== E-Paper Setup ====
 epd = epd13in3E.EPD()
 try:
-    time.sleep(20)
+    time.sleep(5)  # brief settle after power-on (launcher.sh already waits 15s)
     epd.Init()
-    time.sleep(5)
 #    epd.Clear()
     epd.sleep()
-    time.sleep(5)
+    time.sleep(1)
 except Exception as e:
     print("EPD init error:", e)
 
@@ -187,27 +186,24 @@ def _do_display_update(image):
 
         # Perform full clear on every 12th update
         if update_count % 12 == 0:
-            time.sleep(5)
-            epd.Init()
-            time.sleep(5)
-            epd.Clear()
-            time.sleep(5)
-            epd.sleep()
-            time.sleep(5)
+            time.sleep(0.5)
+            epd.Init()     # waits for busy internally
+            epd.Clear()    # waits for busy via TurnOnDisplay → ReadBusyH
+            time.sleep(0.2)
+            epd.sleep()    # has internal 2s delay
+            time.sleep(0.5)
             update_count = 0
 
         # Update image normally
-        time.sleep(5)
-        epd.Init()
-        time.sleep(5)
+        time.sleep(0.5)
+        epd.Init()         # waits for busy internally
         try:
             dithered = apply_dithering(image, cfg['dithering'])
             buf = epd.getbuffer(dithered)
-            epd.display(buf)
-            time.sleep(5)
+            epd.display(buf)  # waits for busy via TurnOnDisplay → ReadBusyH
+            time.sleep(0.2)
         finally:
-            epd.sleep()
-            time.sleep(5)
+            epd.sleep()    # has internal 2s delay
 
         # Update and save config with incremented update_count
         cfg['update_count'] = update_count + 1
@@ -226,15 +222,13 @@ def _do_clear():
     """Handles EPD clear cycle. Runs in the display worker thread."""
     try:
         epd.Init()
-        time.sleep(5)
         epd.Clear()
-        time.sleep(5)
+        time.sleep(0.2)
     except Exception as e:
         print("EPD clear error:", e)
     finally:
         try:
             epd.sleep()
-            time.sleep(5)
         except Exception:
             pass
 
