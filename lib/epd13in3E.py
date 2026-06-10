@@ -32,9 +32,21 @@ import epdconfig
 import PIL
 from PIL import Image
 import io
+import numpy as np
 
 EPD_WIDTH       = 1200
 EPD_HEIGHT      = 1600
+
+# 4-bit color codes understood by the panel controller and their RGB values
+_PANEL_RGB = np.array([
+    [0, 0, 0],        # 0x0 black
+    [255, 255, 255],  # 0x1 white
+    [255, 255, 0],    # 0x2 yellow
+    [255, 0, 0],      # 0x3 red
+    [0, 0, 255],      # 0x5 blue
+    [0, 255, 0],      # 0x6 green
+], dtype=np.int32)
+_PANEL_CODES = np.array([0x0, 0x1, 0x2, 0x3, 0x5, 0x6], dtype=np.uint8)
 
 class EPD():
     def __init__(self):
@@ -229,11 +241,6 @@ class EPD():
         self.CS_ALL(1)
     
     def getbuffer(self, image):
-        # Create a pallette with the 7 colors supported by the panel
-        pal_image = Image.new("P", (1,1))
-        pal_image.putpalette( (0,0,0,  255,255,255,  255,255,0,  255,0,0,  0,0,0,  0,0,255,  0,255,0) + (0,0,0)*249)
-        # pal_image.putpalette( (0,0,0,  255,255,255,  0,255,0,   0,0,255,  255,0,0,  255,255,0, 255,128,0) + (0,0,0)*249)
-
         # Check if we need to rotate the image
         imwidth, imheight = image.size
         if(imwidth == self.width and imheight == self.height):
@@ -241,32 +248,40 @@ class EPD():
         elif(imwidth == self.height and imheight == self.width):
             image_temp = image.rotate(90, expand=True)
         else:
-            print("Invalid image dimensions: %d x %d, expected %d x %d" % (imwidth, imheight, self.width, self.height))
+            raise ValueError("Invalid image dimensions: %d x %d, expected %d x %d" % (imwidth, imheight, self.width, self.height))
 
-        # Convert the soruce image to the 7 colors, dithering if needed
-        image_7color = image_temp.convert("RGB").quantize(palette=pal_image)
-        buf_7color = bytearray(image_7color.tobytes('raw'))
+        if image_temp.mode == "P":
+            # Already palettized (e.g. by the dithering step): map each
+            # palette entry to the nearest panel color code via a LUT
+            # instead of re-quantizing all pixels a second time.
+            pal = image_temp.getpalette()
+            pal = np.asarray(pal + [0] * (768 - len(pal)), dtype=np.int32).reshape(256, 3)
+            dist = ((pal[:, None, :] - _PANEL_RGB[None, :, :]) ** 2).sum(axis=2)
+            lut = _PANEL_CODES[dist.argmin(axis=1)]
+            codes = lut[np.asarray(image_temp, dtype=np.uint8).ravel()]
+        else:
+            # Fallback: convert the source image to the 7 colors, dithering if needed
+            pal_image = Image.new("P", (1,1))
+            pal_image.putpalette( (0,0,0,  255,255,255,  255,255,0,  255,0,0,  0,0,0,  0,0,255,  0,255,0) + (0,0,0)*249)
+            image_7color = image_temp.convert("RGB").quantize(palette=pal_image)
+            codes = np.asarray(image_7color, dtype=np.uint8).ravel()
 
-        # PIL does not support 4 bit color, so pack the 4 bits of color
+        # PIL does not support 4 bit color, so pack two 4-bit color codes
         # into a single byte to transfer to the panel
-        buf = [0x00] * int(self.width * self.height / 2)
-        idx = 0
-        for i in range(0, len(buf_7color), 2):
-            buf[idx] = (buf_7color[i] << 4) + buf_7color[i+1]
-            idx += 1
-            
-        return buf
+        packed = ((codes[0::2] << 4) | (codes[1::2] & 0x0F)).astype(np.uint8)
+        return packed.tobytes()
     
     def Clear(self, color=0x11):
+        row = bytes([color]) * int(self.width/2)
         epdconfig.digital_write(self.EPD_CS_M_PIN, 0)
         self.SendCommand(0x10)
         for i in range(self.height):
-            self.SendData2([color]* int(self.width/2), int(self.width/2))
+            self.SendData2(row, len(row))
         self.CS_ALL(1)
         epdconfig.digital_write(self.EPD_CS_S_PIN, 0)
         self.SendCommand(0x10)
         for i in range(self.height):
-            self.SendData2([color]* int(self.width/2), int(self.width/2))
+            self.SendData2(row, len(row))
         self.CS_ALL(1)
 
         self.TurnOnDisplay()
@@ -275,16 +290,19 @@ class EPD():
         Width =int(self.width / 4)
         Width1 =int(self.width / 2)
 
+        buf = image if isinstance(image, (bytes, bytearray)) else bytes(image)
+        mv = memoryview(buf)
+
         epdconfig.digital_write(self.EPD_CS_M_PIN, 0)
         self.SendCommand(0x10)
         for i in range(self.height):
-            self.SendData2(image[i * Width1 : i * Width1+Width], Width)
+            self.SendData2(mv[i * Width1 : i * Width1+Width], Width)
         self.CS_ALL(1)
 
         epdconfig.digital_write(self.EPD_CS_S_PIN, 0)
         self.SendCommand(0x10)
         for i in range(self.height):
-            self.SendData2(image[i * Width1+Width : i * Width1+Width1], Width)
+            self.SendData2(mv[i * Width1+Width : i * Width1+Width1], Width)
         self.CS_ALL(1)
 
         self.TurnOnDisplay()

@@ -80,9 +80,12 @@ def digital_read(pin):
 def spi_writebyte(value): 
     spi.DEV_SPI_SendData(value)
 
-def spi_writebyte2(buf, len): 
-    array_data = (ctypes.c_ubyte * len)(*buf)
-    spi.DEV_SPI_SendData_nByte(array_data, ctypes.c_ulong(len))
+def spi_writebyte2(buf, length):
+    if isinstance(buf, (bytes, bytearray, memoryview)):
+        array_data = (ctypes.c_ubyte * length).from_buffer_copy(buf)
+    else:
+        array_data = (ctypes.c_ubyte * length)(*buf)
+    spi.DEV_SPI_SendData_nByte(array_data, ctypes.c_ulong(length))
  
 def delay_ms(delaytime):
     time.sleep(delaytime / 1000.0)

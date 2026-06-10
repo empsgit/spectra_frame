@@ -9,6 +9,7 @@ import base64
 import json
 import random
 import queue
+import copy
 import numpy as np
 import RPi.GPIO as GPIO
 
@@ -45,17 +46,30 @@ default_config = {
     "fit_mode":      "pad"  # pad | zoom | stretch
 }
 
+# Config is cached in memory to avoid re-reading the SD card on every
+# request; the lock guards the cache shared by Flask and the display worker.
+_config_lock = threading.Lock()
+_config_cache = None
+
 def load_config():
-    if not os.path.exists(config_path):
-        with open(config_path, 'w') as f:
-            json.dump(default_config, f, indent=2)
-        return default_config.copy()
-    with open(config_path, 'r') as f:
-        return json.load(f)
+    global _config_cache
+    with _config_lock:
+        if _config_cache is None:
+            if not os.path.exists(config_path):
+                with open(config_path, 'w') as f:
+                    json.dump(default_config, f, indent=2)
+                _config_cache = copy.deepcopy(default_config)
+            else:
+                with open(config_path, 'r') as f:
+                    _config_cache = json.load(f)
+        return copy.deepcopy(_config_cache)
 
 def save_config_persist(cfg):
-    with open(config_path, 'w') as f:
-        json.dump(cfg, f, indent=2)
+    global _config_cache
+    with _config_lock:
+        _config_cache = copy.deepcopy(cfg)
+        with open(config_path, 'w') as f:
+            json.dump(cfg, f, indent=2)
 
 config = load_config()
 
@@ -174,6 +188,7 @@ def process_image(path_or_file):
 _display_queue = queue.Queue()
 
 current_source_image = None   # original RGB image (before dithering)
+current_display_path = None   # file path of the image currently shown
 rendered_data = None
 rendering_complete = False
 
@@ -269,8 +284,9 @@ def submit_display(image):
 
 def submit_display_path(path):
     """Submit an image file path for processing, dithering and display."""
-    global rendering_complete
+    global rendering_complete, current_display_path
     rendering_complete = False
+    current_display_path = path
     _display_queue.put(('display_path', path))
 
 def submit_clear():
@@ -589,7 +605,10 @@ def set_fit_mode():
         if cfg['mode'] == 'single' and cfg['single_image']:
             path = os.path.join(single_dir, cfg['single_image'])
         elif cfg['mode'] == 'pool' and cfg['pool_images']:
-            path = os.path.join(pool_dir, cfg['pool_images'][0])
+            # Re-render the image currently on screen, not just the first one
+            path = current_display_path
+            if not path or not os.path.exists(path):
+                path = os.path.join(pool_dir, cfg['pool_images'][0])
         else:
             return jsonify(success=True)  # nothing to render
 
@@ -602,7 +621,7 @@ def set_fit_mode():
 def set_dither():
     data = request.get_json() or {}
     alg  = data.get('algorithm')
-    if alg in ("floyd-steinberg","atkinson","shiau-fan-2","jarvis-judice-ninke","stucki","burkes"):
+    if alg in ("floyd-steinberg","atkinson","shiau-fan-2","stucki","burkes"):
         cfg = load_config()
         cfg['dithering'] = alg
         save_config_persist(cfg)
@@ -639,4 +658,5 @@ def clear_endpoint():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=80)
+    # threaded=True keeps the UI responsive while the display worker is busy
+    app.run(host='0.0.0.0', port=80, threaded=True)
