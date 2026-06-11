@@ -126,6 +126,10 @@ class EPD():
         self.SendCommand(0x02)
         self.SendData(0x00)
         self.CS_ALL(1)
+        # Wait for power-off to complete before the caller sends the deep
+        # sleep command / cuts SPI; skipping this wedges the controller
+        # (frame hangs after Clear)
+        self.ReadBusyH()
         print("Display Done!!")
 
     def Init(self):
@@ -275,6 +279,20 @@ class EPD():
         # into a single byte to transfer to the panel
         packed = ((codes[0::2] << 4) | (codes[1::2] & 0x0F)).astype(np.uint8)
         return packed.tobytes()
+
+    def buffer_to_image(self, buf):
+        """Decode a packed 4-bit display buffer back into a palettized PIL
+        image (panel-native portrait orientation). Lets callers preview
+        exactly what was sent to the panel."""
+        b = np.frombuffer(bytes(buf), dtype=np.uint8)
+        codes = np.empty(b.size * 2, dtype=np.uint8)
+        codes[0::2] = b >> 4
+        codes[1::2] = b & 0x0F
+        img = Image.fromarray(codes.reshape((self.height, self.width)), mode='P')
+        pal = np.zeros((256, 3), dtype=np.uint8)
+        pal[_PANEL_CODES] = _PANEL_RGB
+        img.putpalette(pal.ravel().tolist())
+        return img
     
     def Clear(self, color=0x11):
         row = bytes([color]) * int(self.width/2)
