@@ -78,15 +78,24 @@ config = load_config()
 
 # ==== E-Paper Setup ====
 epd = epd13in3E.EPD()
-try:
-    time.sleep(3)   # power-on settle; launcher.sh already waits 15s before us
-    epd.Init()
-    time.sleep(1)
-#    epd.Clear()
-    epd.sleep()
-    time.sleep(1)
-except Exception as e:
-    print("EPD init error:", e)
+
+def epd_init_retry(attempts=3, wait=10):
+    """Init the panel, re-initializing SPI/GPIO between attempts.
+    Covers slow power-rail settling right after power-on and transient
+    glitches; raises after the last attempt so callers can abort."""
+    for i in range(1, attempts + 1):
+        try:
+            epd.Init()
+            return
+        except Exception as e:
+            print("EPD init attempt %d/%d failed: %s" % (i, attempts, e))
+            try:
+                epd13in3E.epdconfig.module_exit()
+            except Exception:
+                pass
+            if i == attempts:
+                raise
+            time.sleep(wait)
 
 def get_target_size():
     return (max(epd.width, epd.height), min(epd.width, epd.height))
@@ -220,7 +229,7 @@ def _do_display_update(image):
         # Perform full clear on every 12th update
         if update_count % 12 == 0:
             time.sleep(1)
-            epd.Init()      # Reset + busy-pin wait inside
+            epd_init_retry()   # Reset + busy-pin wait inside
             time.sleep(1)
             epd.Clear()     # blocks via ReadBusyH until the refresh is done
             time.sleep(1)
@@ -230,7 +239,7 @@ def _do_display_update(image):
 
         # Update image normally
         time.sleep(1)
-        epd.Init()
+        epd_init_retry()
         time.sleep(1)
         try:
             dithered = apply_dithering(image, cfg['dithering'])
@@ -260,10 +269,23 @@ def _do_display_update(image):
         print("EPD update error:", e)
         rendering_complete = False
 
+def _do_boot_init():
+    """First contact with the panel after power-on. Runs in the display
+    worker so the web UI comes up immediately instead of blocking behind
+    a slow or unresponsive panel."""
+    try:
+        time.sleep(3)  # brief power-on settle
+        epd_init_retry()
+        epd.sleep()
+        time.sleep(1)
+        print("EPD boot init OK")
+    except Exception as e:
+        print("EPD boot init error:", e)
+
 def _do_clear():
     """Handles EPD clear cycle. Runs in the display worker thread."""
     try:
-        epd.Init()
+        epd_init_retry()
         time.sleep(1)
         epd.Clear()
         time.sleep(1)
@@ -294,6 +316,8 @@ def _display_worker():
                 _do_display_update(process_image(task[1]))
             elif action == 'clear':
                 _do_clear()
+            elif action == 'boot':
+                _do_boot_init()
         except Exception as e:
             print("Display worker error:", e)
 
@@ -327,6 +351,9 @@ def initial_display():
         if os.path.exists(p):
             submit_display_path(p)
 
+# Panel init happens in the worker; if initial_display() queues a render
+# right after, the queue collapses to it and the render does its own init.
+_display_queue.put(('boot',))
 initial_display()
 
 # ==== Flask & inactivity ====

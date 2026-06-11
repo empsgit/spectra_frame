@@ -1,0 +1,25 @@
+# systemd unit for the Spectra 6 picture frame.
+# Adjust the paths if the repo lives somewhere other than /home/zero.
+#
+# Install:
+#   sudo cp spectra_frame.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now spectra_frame.service
+# Logs:
+#   sudo journalctl -u spectra_frame.service -f
+
+[Unit]
+Description=Spectra Frame Display Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/zero/spectra_frame
+ExecStart=/usr/bin/python3 /home/zero/spectra_frame/app.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
