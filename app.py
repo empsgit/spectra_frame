@@ -76,12 +76,12 @@ config = load_config()
 # ==== E-Paper Setup ====
 epd = epd13in3E.EPD()
 try:
-    time.sleep(20)
+    time.sleep(3)   # power-on settle; launcher.sh already waits 15s before us
     epd.Init()
-    time.sleep(5)
+    time.sleep(1)
 #    epd.Clear()
     epd.sleep()
-    time.sleep(5)
+    time.sleep(1)
 except Exception as e:
     print("EPD init error:", e)
 
@@ -102,9 +102,13 @@ from lib.error_dither_core import error_diffuse as cy_error_diffuse
 def apply_dithering(image, algorithm):
     """
     Convert a PIL-RGB image into our 6-color palette using the selected algorithm.
+
+    Note: quantize() is used instead of convert("P", palette=...) because
+    convert silently ignores a palette image and dithers to the standard
+    web palette instead.
     """
     if algorithm == "floyd-steinberg":
-        return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
+        return image.convert("RGB").quantize(palette=_palette_img, dither=Image.FLOYDSTEINBERG)
     if algorithm == "atkinson":
         return atkinson_dither(image)
     if algorithm == "shiau-fan-2":
@@ -114,20 +118,20 @@ def apply_dithering(image, algorithm):
     if algorithm == "burkes":
         return burkes_dither(image)
     # fallback
-    return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
+    return image.convert("RGB").quantize(palette=_palette_img, dither=Image.FLOYDSTEINBERG)
 
 def atkinson_dither(image: Image.Image) -> Image.Image:
     img = np.array(image.convert("RGB"), dtype=np.float32)
     palette = np.array(_palette_rgb, dtype=np.uint8)
     output = cy_atkinson_dither(img, palette)
-    return Image.fromarray(output, mode='RGB').convert("P", palette=_palette_img, dither=Image.NONE)
+    return Image.fromarray(output, mode='RGB').quantize(palette=_palette_img, dither=Image.NONE)
 
 def error_diffusion(image, kernel, divisor, anchor):
     img = np.array(image.convert("RGB"), dtype=np.float32)
     palette = np.array(_palette_rgb, dtype=np.uint8)
     kernel_np = np.array(kernel, dtype=np.int32)
     output = cy_error_diffuse(img, kernel_np, divisor, anchor, palette)
-    return Image.fromarray(output, mode='RGB').convert("P", palette=_palette_img, dither=Image.NONE)
+    return Image.fromarray(output, mode='RGB').quantize(palette=_palette_img, dither=Image.NONE)
 
 def shiaufan2_dither(image):
     kernel = [
@@ -202,29 +206,32 @@ def _do_display_update(image):
 
         # Perform full clear on every 12th update
         if update_count % 12 == 0:
-            time.sleep(5)
-            epd.Init()
-            time.sleep(5)
-            epd.Clear()
-            time.sleep(5)
-            epd.sleep()
-            time.sleep(5)
+            time.sleep(1)
+            epd.Init()      # Reset + busy-pin wait inside
+            time.sleep(1)
+            epd.Clear()     # blocks via ReadBusyH until the refresh is done
+            time.sleep(1)
+            epd.sleep()     # has an internal 2s settle before power-off
+            time.sleep(1)
             update_count = 0
 
         # Update image normally
-        time.sleep(5)
+        time.sleep(1)
         epd.Init()
-        time.sleep(5)
+        time.sleep(1)
         try:
             dithered = apply_dithering(image, cfg['dithering'])
             buf = epd.getbuffer(dithered)
             epd.display(buf)
-            time.sleep(5)
+            time.sleep(1)
         finally:
             epd.sleep()
-            time.sleep(5)
+            time.sleep(1)
 
-        # Update and save config with incremented update_count
+        # Persist the new update_count on top of a FRESH config: settings
+        # changed from the web UI while this render was running must not be
+        # clobbered by our stale snapshot
+        cfg = load_config()
         cfg['update_count'] = update_count + 1
         save_config_persist(cfg)
 
@@ -241,15 +248,15 @@ def _do_clear():
     """Handles EPD clear cycle. Runs in the display worker thread."""
     try:
         epd.Init()
-        time.sleep(5)
+        time.sleep(1)
         epd.Clear()
-        time.sleep(5)
+        time.sleep(1)
     except Exception as e:
         print("EPD clear error:", e)
     finally:
         try:
             epd.sleep()
-            time.sleep(5)
+            time.sleep(1)
         except Exception:
             pass
 
@@ -407,18 +414,36 @@ function showMsg(txt, cls="info") {
   document.getElementById('msg').innerHTML = `<div class="alert alert-${cls}">${txt}</div>`;
 }
 
+// Single polling chain: pressing several buttons must not stack up
+// parallel /preview pollers.
+let pollTimer = null;
 function pollPreview() {
+  clearTimeout(pollTimer);
   fetch('/preview')
     .then(response => response.json())
     .then(data => {
       if (data.rendered_image) {
         document.getElementById('preview').src = "data:image/png;base64," + data.rendered_image;
         showMsg("Rendering complete!", "success");
+        loadConfig();
       } else {
-        setTimeout(pollPreview, 3000);
+        pollTimer = setTimeout(pollPreview, 3000);
       }
     })
-    .catch(e => showMsg("Error fetching preview: " + e, "danger"));
+    .catch(e => { pollTimer = setTimeout(pollPreview, 5000); });
+}
+
+function doAction(url, opts, msg) {
+  showMsg(msg, "info");
+  fetch(url, opts).then(r => {
+    if (r.ok) {
+      showMsg("Rendering... (e-paper refresh takes a while)", "info");
+      pollPreview();
+    } else {
+      return r.json().then(j => showMsg(j.error || ("Error " + r.status), "danger"))
+                     .catch(() => showMsg("Error " + r.status, "danger"));
+    }
+  }).catch(e => showMsg("Request failed: " + e, "danger"));
 }
 
 function loadConfig(){
@@ -448,7 +473,8 @@ function loadConfig(){
           method: 'POST',
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({filename: fn})
-        }).then(loadPool);
+        }).then(loadConfig)
+          .catch(e => showMsg("Request failed: " + e, "danger"));
       };
       li.appendChild(btn);
       ul.appendChild(li);
@@ -458,52 +484,45 @@ function loadConfig(){
 
 document.getElementById('singleForm').onsubmit = e => {
   e.preventDefault();
-  showMsg("Uploading...", "info");
-  fetch('/mode/single', {method:'POST', body:new FormData(e.target)})
-    .then(()=>{ showMsg("Rendering...", "info"); pollPreview(); });
+  doAction('/mode/single', {method:'POST', body:new FormData(e.target)}, "Uploading...");
 };
 
 document.getElementById('addPoolForm').onsubmit = e => {
   e.preventDefault();
   showMsg("Adding to pool...", "info");
   fetch('/mode/pool/add', {method:'POST', body:new FormData(e.target)})
-    .then(()=>{ showMsg("Done.", "success"); loadConfig(); });
+    .then(r => {
+      if (r.ok) { showMsg("Done.", "success"); loadConfig(); }
+      else showMsg("Upload failed (" + r.status + ")", "danger");
+    })
+    .catch(e => showMsg("Request failed: " + e, "danger"));
 };
 
-document.getElementById('setPool').onclick = () => {
-  showMsg("Setting pool mode...", "info");
-  fetch('/mode/pool/set', {method:'POST'})
-    .then(()=>{ showMsg("Rendering...", "info"); pollPreview(); });
-};
+document.getElementById('setPool').onclick = () =>
+  doAction('/mode/pool/set', {method:'POST'}, "Setting pool mode...");
 
-document.getElementById('setFitMode').onclick = () => {
-  const mode = document.getElementById('fitModeSelect').value;
-  showMsg("Applying fit mode...", "info");
-  fetch('/mode/fit/set', {
+document.getElementById('setFitMode').onclick = () =>
+  doAction('/mode/fit/set', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({fit_mode: mode})
-  }).then(()=> { showMsg("Rendering...", "info"); pollPreview(); });
-};
+    body: JSON.stringify({fit_mode: document.getElementById('fitModeSelect').value})
+  }, "Applying fit mode...");
 
-document.getElementById('setDither').onclick = () => {
-  const alg = document.getElementById('ditherSelect').value;
-  showMsg("Applying dithering...", "info");
-  fetch('/mode/dither/set', {
+document.getElementById('setDither').onclick = () =>
+  doAction('/mode/dither/set', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({algorithm: alg})
-  }).then(()=>{ showMsg("Rendering...", "info"); pollPreview(); });
-};
+    body: JSON.stringify({algorithm: document.getElementById('ditherSelect').value})
+  }, "Applying dithering...");
 
 document.getElementById('clearBtn').onclick = () => {
   showMsg("Clearing screen...", "info");
   fetch('/clear', {method:'POST'})
-    .then(()=> showMsg("Screen cleared", "success"));
+    .then(r => showMsg(r.ok ? "Clear queued - panel will blank shortly" : "Error " + r.status,
+                       r.ok ? "success" : "danger"))
+    .catch(e => showMsg("Request failed: " + e, "danger"));
 };
 
-document.getElementById('rotateBtn').onclick = () => {
-  showMsg("Rotating...", "info");
-  fetch('/rotate', {method:'GET'}).then(()=>{ showMsg("Rendering...", "info"); pollPreview(); });
-};
+document.getElementById('rotateBtn').onclick = () =>
+  doAction('/rotate', {method:'GET'}, "Rotating...");
 
 loadConfig();
 pollPreview();
@@ -520,7 +539,10 @@ def index():
 
 @app.route('/preview', methods=['GET'])
 def preview():
-    return jsonify(rendered_image=rendered_data, success=rendering_complete)
+    # Only expose the image once the current render is done, otherwise the
+    # UI instantly shows the previous (stale) render after every button press
+    return jsonify(rendered_image=rendered_data if rendering_complete else None,
+                   success=rendering_complete)
 
 @app.route('/mode/single', methods=['POST'])
 def set_single():
@@ -628,6 +650,16 @@ def set_dither():
         # re-render current image with new dithering
         if current_source_image is not None:
             submit_display(current_source_image)
+        else:
+            # No in-memory image yet (e.g. right after boot): re-render from disk
+            if cfg['mode'] == 'single' and cfg['single_image']:
+                p = os.path.join(single_dir, cfg['single_image'])
+            elif cfg['mode'] == 'pool' and cfg['pool_images']:
+                p = current_display_path or os.path.join(pool_dir, cfg['pool_images'][0])
+            else:
+                p = None
+            if p and os.path.exists(p):
+                submit_display_path(p)
         return jsonify(success=True)
     return jsonify(error="Invalid algorithm"), 400
 
