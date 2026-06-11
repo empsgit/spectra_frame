@@ -250,16 +250,21 @@ class EPD():
         else:
             raise ValueError("Invalid image dimensions: %d x %d, expected %d x %d" % (imwidth, imheight, self.width, self.height))
 
+        codes = None
         if image_temp.mode == "P":
-            # Already palettized (e.g. by the dithering step): map each
-            # palette entry to the nearest panel color code via a LUT
-            # instead of re-quantizing all pixels a second time.
+            # Already palettized by the dithering step: when every palette
+            # entry is exactly one of the panel colors, map indices through
+            # a LUT instead of re-quantizing all pixels a second time.
+            # Palettes with other colors (e.g. the web palette) must NOT be
+            # snapped to panel colors without error diffusion - that
+            # posterizes the image - so they take the quantize path below.
             pal = image_temp.getpalette()
             pal = np.asarray(pal + [0] * (768 - len(pal)), dtype=np.int32).reshape(256, 3)
             dist = ((pal[:, None, :] - _PANEL_RGB[None, :, :]) ** 2).sum(axis=2)
-            lut = _PANEL_CODES[dist.argmin(axis=1)]
-            codes = lut[np.asarray(image_temp, dtype=np.uint8).ravel()]
-        else:
+            if (dist.min(axis=1) == 0).all():
+                lut = _PANEL_CODES[dist.argmin(axis=1)]
+                codes = lut[np.asarray(image_temp, dtype=np.uint8).ravel()]
+        if codes is None:
             # Fallback: convert the source image to the 7 colors, dithering if needed
             pal_image = Image.new("P", (1,1))
             pal_image.putpalette( (0,0,0,  255,255,255,  255,255,0,  255,0,0,  0,0,0,  0,0,255,  0,255,0) + (0,0,0)*249)
