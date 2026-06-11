@@ -166,13 +166,19 @@ def burkes_dither(image):
 # ==== Image processing ====
 
 def process_image(path_or_file):
-    img = Image.open(path_or_file).convert("RGB")
+    img = Image.open(path_or_file)
+    target = get_target_size()
+    # JPEG fast path: decode directly at reduced resolution. Multi-MP phone
+    # photos otherwise cost ~40MB+ RAM each to decode on a Pi Zero. No-op
+    # for other formats. Request the short side so portrait shots (rotated
+    # below) still decode large enough for the final resize.
+    img.draft("RGB", (min(target), min(target)))
     img = ImageOps.exif_transpose(img)
+    img = img.convert("RGB")
     if img.height > img.width:
         img = img.rotate(270, expand=True)
 
     fit_mode = load_config().get("fit_mode", "pad")
-    target = get_target_size()
 
     if fit_mode == "stretch":
         img = img.resize(target, Image.Resampling.LANCZOS)
@@ -692,6 +698,11 @@ def _thumb_path(fn):
     # extension appended (not replaced) so distinct uploads never collide
     return os.path.join(thumbs_dir, fn + '.jpg')
 
+# One thumbnail generation at a time: the browser requests all of them in
+# parallel, and decoding several multi-MP photos at once would exhaust the
+# Pi Zero's RAM
+_thumb_lock = threading.Lock()
+
 @app.route('/pool/thumb/<path:filename>', methods=['GET'])
 def pool_thumb(filename):
     fn = secure_filename(filename)
@@ -700,14 +711,17 @@ def pool_thumb(filename):
         return jsonify(error="Not found"), 404
     th = _thumb_path(fn)
     try:
-        if not os.path.exists(th) or os.path.getmtime(th) < os.path.getmtime(src):
-            img = Image.open(src)
-            img = ImageOps.exif_transpose(img)
-            img.thumbnail((240, 180))
-            img.convert("RGB").save(th, "JPEG", quality=80)
+        with _thumb_lock:
+            if not os.path.exists(th) or os.path.getmtime(th) < os.path.getmtime(src):
+                img = Image.open(src)
+                # decode JPEGs at ~1/8 resolution instead of full size
+                img.draft("RGB", (480, 360))
+                img.thumbnail((240, 180))
+                img = ImageOps.exif_transpose(img)
+                img.convert("RGB").save(th, "JPEG", quality=80)
     except Exception as e:
         return jsonify(error=str(e)), 500
-    return send_file(th, mimetype='image/jpeg')
+    return send_file(th, mimetype='image/jpeg', max_age=3600, conditional=True)
 
 @app.route('/mode/pool/show', methods=['POST'])
 def pool_show():

@@ -136,8 +136,11 @@ class EPD():
         print("EPD init...")
         epdconfig.module_init()
         
-        self.Reset() 
-        self.ReadBusyH()
+        self.Reset()
+        # A healthy panel reports idle well under a second after reset;
+        # fail fast on a wedged/unpowered panel instead of blocking the
+        # display worker for the full 120s refresh timeout
+        self.ReadBusyH(timeout_s=20)
 
         epdconfig.digital_write(self.EPD_CS_M_PIN, 0)
         self.SendCommand(0x74)
