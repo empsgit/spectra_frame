@@ -13,7 +13,7 @@ import copy
 import numpy as np
 import RPi.GPIO as GPIO
 
-from flask import Flask, request, render_template_string, jsonify
+from flask import Flask, request, render_template_string, jsonify, send_file
 from werkzeug.utils import secure_filename
 from PIL import Image, ImageOps, ImageEnhance
 
@@ -34,8 +34,11 @@ GPIO.setmode(GPIO.BCM)
 GPIO.setup(16, GPIO.OUT, initial=GPIO.LOW)
 
 
+thumbs_dir = os.path.join(picdir, 'thumbs')
+
 os.makedirs(single_dir, exist_ok=True)
 os.makedirs(pool_dir, exist_ok=True)
+os.makedirs(thumbs_dir, exist_ok=True)
 
 default_config = {
     "mode":          "single",
@@ -101,14 +104,18 @@ from lib.error_dither_core import error_diffuse as cy_error_diffuse
 
 def apply_dithering(image, algorithm):
     """
-    Convert a PIL-RGB image into our 6-color palette using the selected algorithm.
+    Convert a PIL-RGB image into the panel's colors using the selected algorithm.
 
-    Note: quantize() is used instead of convert("P", palette=...) because
-    convert silently ignores a palette image and dithers to the standard
-    web palette instead.
+    floyd-steinberg deliberately dithers in TWO stages: convert("P", ...)
+    ignores the custom palette image and dithers to the 216-color web
+    palette; epd.getbuffer then re-dithers that to the 6 panel colors.
+    The double error diffusion gives a finer, softer look than a single
+    direct pass to 6 colors. The Cython algorithms produce exact panel
+    colors, which quantize() attaches losslessly and epd.getbuffer maps
+    1:1 through its fast LUT path without re-dithering.
     """
     if algorithm == "floyd-steinberg":
-        return image.convert("RGB").quantize(palette=_palette_img, dither=Image.FLOYDSTEINBERG)
+        return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
     if algorithm == "atkinson":
         return atkinson_dither(image)
     if algorithm == "shiau-fan-2":
@@ -118,7 +125,7 @@ def apply_dithering(image, algorithm):
     if algorithm == "burkes":
         return burkes_dither(image)
     # fallback
-    return image.convert("RGB").quantize(palette=_palette_img, dither=Image.FLOYDSTEINBERG)
+    return image.convert("RGB").convert("P", palette=_palette_img, dither=Image.FLOYDSTEINBERG)
 
 def atkinson_dither(image: Image.Image) -> Image.Image:
     img = np.array(image.convert("RGB"), dtype=np.float32)
@@ -236,8 +243,11 @@ def _do_display_update(image):
         save_config_persist(cfg)
 
         current_source_image = image
+        # Build the preview from the actual panel buffer so the browser
+        # shows exactly what the e-paper displays
+        preview_img = epd.buffer_to_image(buf).rotate(90, expand=True)
         buf_io = io.BytesIO()
-        dithered.rotate(180).save(buf_io, format="PNG")
+        preview_img.save(buf_io, format="PNG")
         rendered_data = base64.b64encode(buf_io.getvalue()).decode('utf-8')
         rendering_complete = True
     except Exception as e:
@@ -342,76 +352,156 @@ INDEX_HTML = """
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Spectra 6 Picture Frame</title>
-  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
-  <style>body{padding:20px;} .section{margin-bottom:30px;}</style>
+  <title>Spectra 6 Frame</title>
+  <style>
+    :root{
+      --bg:#10141a; --card:#1a212b; --line:#2a3442; --text:#e8edf4;
+      --muted:#8a97a8; --accent:#4f9cf9; --green:#3ecf8e; --red:#ef6363;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);
+         font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+    .wrap{max-width:980px;margin:0 auto;padding:24px 16px 64px;}
+    header{display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap;}
+    header h1{font-size:21px;margin:0;font-weight:650;}
+    .badge{font-size:12px;color:var(--muted);border:1px solid var(--line);
+           border-radius:999px;padding:3px 10px;}
+    #msg{margin-left:auto;}
+    .status{display:inline-flex;align-items:center;gap:8px;font-size:13px;
+            padding:6px 12px;border-radius:999px;border:1px solid var(--line);}
+    .status.info{color:var(--accent)} .status.success{color:var(--green)}
+    .status.danger{color:var(--red)}
+    .spin{width:12px;height:12px;border:2px solid currentColor;flex:none;
+          border-top-color:transparent;border-radius:50%;animation:sp 1s linear infinite;}
+    @keyframes sp{to{transform:rotate(360deg)}}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+    @media(max-width:760px){.grid{grid-template-columns:1fr}}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;}
+    .card h2{font-size:13px;margin:0 0 12px;font-weight:600;color:var(--muted);
+             text-transform:uppercase;letter-spacing:.07em;}
+    .span2{grid-column:1/-1;}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px;}
+    .hint{font-size:12px;color:var(--muted);margin-top:8px;}
+    .btn{background:#243043;color:var(--text);border:1px solid var(--line);
+         border-radius:9px;padding:8px 14px;font-size:14px;cursor:pointer;}
+    .btn:hover{background:#2c3b52}
+    .btn.primary{background:var(--accent);border-color:transparent;color:#fff;}
+    .btn.primary:hover{filter:brightness(1.12)}
+    .btn.danger{background:transparent;border-color:#5c3434;color:var(--red);}
+    .btn.danger:hover{background:#3a2222}
+    select{background:#0f1620;color:var(--text);border:1px solid var(--line);
+           border-radius:9px;padding:8px 10px;font-size:14px;min-width:190px;}
+    label.fld{font-size:13px;color:var(--muted);display:block;margin-bottom:4px;}
+    input[type=file]{color:var(--muted);font-size:13px;max-width:100%;}
+    input[type=file]::file-selector-button{
+      background:#243043;color:var(--text);border:1px solid var(--line);
+      border-radius:9px;padding:7px 12px;font-size:13px;cursor:pointer;margin-right:10px;}
+    .preview-box{background:#0b0f14;border:1px solid var(--line);border-radius:10px;
+                 display:flex;align-items:center;justify-content:center;
+                 min-height:200px;overflow:hidden;}
+    .preview-box img{max-width:100%;height:auto;display:none;}
+    .preview-box .ph{color:var(--muted);font-size:13px;}
+    .pool{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));
+          gap:10px;margin-top:14px;}
+    .pi{position:relative;border:2px solid var(--line);border-radius:10px;
+        overflow:hidden;background:#0b0f14;}
+    .pi.current{border-color:var(--green);}
+    .pi.current::after{content:"on display";position:absolute;left:6px;top:6px;
+        background:var(--green);color:#06291a;font-size:10px;font-weight:700;
+        padding:2px 6px;border-radius:6px;pointer-events:none;}
+    .pi img{width:100%;height:96px;object-fit:cover;display:block;cursor:pointer;}
+    .pi img:hover{opacity:.8}
+    .pi .nm{font-size:11px;color:var(--muted);padding:5px 8px;white-space:nowrap;
+            overflow:hidden;text-overflow:ellipsis;}
+    .pi .rm{position:absolute;top:5px;right:5px;width:22px;height:22px;border-radius:50%;
+            border:none;background:rgba(0,0,0,.55);color:#fff;cursor:pointer;
+            font-size:12px;line-height:1;}
+    .pi .rm:hover{background:var(--red);}
+    details{margin-top:16px;}
+    summary{cursor:pointer;color:var(--muted);font-size:13px;}
+    pre{background:#0b0f14;border:1px solid var(--line);border-radius:10px;
+        padding:12px;font-size:12px;color:var(--muted);overflow:auto;}
+  </style>
 </head>
 <body>
-  <h1 class="mb-4">Spectra 6 Picture Frame</h1>
+<div class="wrap">
+  <header>
+    <h1>Spectra 6 Frame</h1>
+    <span class="badge" id="modeBadge">mode: &hellip;</span>
+    <div id="msg"></div>
+  </header>
 
-  <div class="section">
-    <h3>Single Image Mode</h3>
-    <form id="singleForm" enctype="multipart/form-data">
-      <input type="file" name="image" accept="image/*" required>
-      <button class="btn btn-primary mt-2">Upload & Set</button>
-    </form>
-  </div>
+  <div class="grid">
+    <div class="card span2">
+      <h2>Now on display</h2>
+      <div class="preview-box">
+        <div class="ph" id="previewPh">No render yet</div>
+        <img id="preview" alt="Panel preview">
+      </div>
+      <div class="row">
+        <button id="rotateBtn" class="btn">Rotate 90&deg;</button>
+        <button id="clearBtn" class="btn danger">Clear e-paper</button>
+      </div>
+      <div class="hint">Preview is decoded from the exact buffer sent to the panel.</div>
+    </div>
 
-  <div class="section">
-    <h3>Image Pool Mode</h3>
-    <form id="addPoolForm" enctype="multipart/form-data">
-      <input type="file" name="images" accept="image/*" multiple>
-      <button class="btn btn-secondary mt-2">Add to Pool</button>
-    </form>
-    <button id="setPool" class="btn btn-primary mt-2">Use Pool Mode</button>
-    <h5 class="mt-3">Current Pool</h5>
-    <ul id="poolList"></ul>
-  </div>
-  <div class="section">
-    <h3>Image Fit Mode</h3>
-      <select id="fitModeSelect" class="form-control" style="max-width:300px;">
-        <option value="pad">Pad with White Borders</option>
-        <option value="zoom">Zoom to Fill</option>
+    <div class="card">
+      <h2>Show a single image</h2>
+      <form id="singleForm">
+        <input type="file" name="image" accept="image/*" required>
+        <div class="row">
+          <button class="btn primary">Upload &amp; show</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Settings</h2>
+      <label class="fld" for="fitModeSelect">Image fit</label>
+      <select id="fitModeSelect">
+        <option value="pad">Pad with white borders</option>
+        <option value="zoom">Zoom to fill</option>
         <option value="stretch">Stretch</option>
       </select>
-    <button id="setFitMode" class="btn btn-primary mt-2">Apply & Refresh</button>
-  </div>
-  <div class="section">
-    <h3>Dithering Algorithm</h3>
-    <select id="ditherSelect" class="form-control" style="max-width:300px;">
-      <option value="floyd-steinberg">Floyd–Steinberg</option>
-      <option value="atkinson">Atkinson</option>
-      <option value="shiau-fan-2">Shiau-Fan 2</option>
-      <option value="stucki">Stucki</option>
-      <option value="burkes">Burkes</option>
-    </select>
-    <button id="setDither" class="btn btn-primary mt-2">Apply & Refresh</button>
+      <label class="fld" for="ditherSelect" style="margin-top:10px;">Dithering</label>
+      <select id="ditherSelect">
+        <option value="floyd-steinberg">Floyd&ndash;Steinberg</option>
+        <option value="atkinson">Atkinson</option>
+        <option value="shiau-fan-2">Shiau-Fan 2</option>
+        <option value="stucki">Stucki</option>
+        <option value="burkes">Burkes</option>
+      </select>
+      <div class="row">
+        <button id="applySettings" class="btn primary">Apply &amp; re-render</button>
+      </div>
+    </div>
+
+    <div class="card span2">
+      <h2>Image pool (rotation)</h2>
+      <form id="addPoolForm">
+        <input type="file" name="images" accept="image/*" multiple>
+        <div class="row">
+          <button class="btn">Add to pool</button>
+          <button type="button" id="setPool" class="btn primary">Use pool mode</button>
+        </div>
+      </form>
+      <div class="hint">A random pool image is shown on every wake-up. Click a thumbnail to show it now.</div>
+      <div class="hint" id="poolEmpty">Pool is empty.</div>
+      <div class="pool" id="poolGrid"></div>
+    </div>
   </div>
 
-  <div class="section">
-    <h3>Art of the Day</h3>
-    <button id="setArt" class="btn btn-primary">Set Art Mode</button>
-    <p class="text-muted">(Not implemented)</p>
-  </div>
+  <details>
+    <summary>Raw configuration</summary>
+    <pre id="configDisplay"></pre>
+  </details>
+</div>
 
-  <div class="section">
-    <h3>Clear Screen</h3>
-    <button id="clearBtn" class="btn btn-danger">Clear E-Paper</button>
-  </div>
-
-  <div class="section">
-    <h3>Live Preview</h3>
-    <div id="msg"></div>
-    <img id="preview" src="" class="img-fluid" style="max-width:400px;">
-    <button id="rotateBtn" class="btn btn-warning mt-2">Rotate 90°</button>
-  </div>
-  <div class="section">
-    <h3>Current Configuration</h3>
-    <pre id="configDisplay" class="bg-light p-3"></pre>
-  </div>
 <script>
-function showMsg(txt, cls="info") {
-  document.getElementById('msg').innerHTML = `<div class="alert alert-${cls}">${txt}</div>`;
+const $ = id => document.getElementById(id);
+
+function showMsg(txt, cls = "info", busy = false) {
+  $('msg').innerHTML = `<span class="status ${cls}">${busy ? '<span class="spin"></span>' : ''}${txt}</span>`;
 }
 
 // Single polling chain: pressing several buttons must not stack up
@@ -420,24 +510,26 @@ let pollTimer = null;
 function pollPreview() {
   clearTimeout(pollTimer);
   fetch('/preview')
-    .then(response => response.json())
+    .then(r => r.json())
     .then(data => {
       if (data.rendered_image) {
-        document.getElementById('preview').src = "data:image/png;base64," + data.rendered_image;
-        showMsg("Rendering complete!", "success");
+        $('preview').src = "data:image/png;base64," + data.rendered_image;
+        $('preview').style.display = 'block';
+        $('previewPh').style.display = 'none';
+        showMsg("Up to date", "success");
         loadConfig();
       } else {
         pollTimer = setTimeout(pollPreview, 3000);
       }
     })
-    .catch(e => { pollTimer = setTimeout(pollPreview, 5000); });
+    .catch(() => { pollTimer = setTimeout(pollPreview, 5000); });
 }
 
 function doAction(url, opts, msg) {
-  showMsg(msg, "info");
+  showMsg(msg, "info", true);
   fetch(url, opts).then(r => {
     if (r.ok) {
-      showMsg("Rendering... (e-paper refresh takes a while)", "info");
+      showMsg("Rendering&hellip; e-paper refresh takes a minute", "info", true);
       pollPreview();
     } else {
       return r.json().then(j => showMsg(j.error || ("Error " + r.status), "danger"))
@@ -446,83 +538,96 @@ function doAction(url, opts, msg) {
   }).catch(e => showMsg("Request failed: " + e, "danger"));
 }
 
-function loadConfig(){
-  fetch('/config').then(r=>r.json()).then(c=>{
-    document.getElementById('configDisplay').innerText =
-      JSON.stringify(c, null, 2);
+function loadConfig() {
+  fetch('/config').then(r => r.json()).then(c => {
+    $('configDisplay').textContent = JSON.stringify(c, null, 2);
+    if (c.fit_mode) $('fitModeSelect').value = c.fit_mode;
+    if (c.dithering) $('ditherSelect').value = c.dithering;
+    $('modeBadge').textContent = "mode: " + c.mode;
+  }).catch(() => {});
 
-    if (c.fit_mode) {
-      document.getElementById('fitModeSelect').value = c.fit_mode;
-    }
-    if (c.dithering) {
-      document.getElementById('ditherSelect').value = c.dithering;
-    }
-  });
+  fetch('/pool/list').then(r => r.json()).then(p => {
+    const grid = $('poolGrid');
+    grid.innerHTML = "";
+    const images = p.images || [];
+    $('poolEmpty').style.display = images.length ? 'none' : 'block';
+    images.forEach(fn => {
+      const card = document.createElement('div');
+      card.className = 'pi' + (fn === p.current ? ' current' : '');
 
-  fetch('/pool/list').then(r=>r.json()).then(p=>{
-    let ul = document.getElementById('poolList');
-    ul.innerHTML = "";
-    p.forEach(fn => {
-      const li = document.createElement('li');
-      li.textContent = fn + " ";
-      const btn = document.createElement('button');
-      btn.textContent = "Remove";
-      btn.className = "btn btn-sm btn-danger ml-2";
-      btn.onclick = () => {
+      const img = document.createElement('img');
+      img.src = '/pool/thumb/' + encodeURIComponent(fn);
+      img.title = "Show on frame";
+      img.onclick = () => doAction('/mode/pool/show', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({filename: fn})
+      }, "Showing " + fn + "&hellip;");
+
+      const nm = document.createElement('div');
+      nm.className = 'nm'; nm.textContent = fn; nm.title = fn;
+
+      const rm = document.createElement('button');
+      rm.className = 'rm'; rm.textContent = '✕'; rm.title = "Remove from pool";
+      rm.onclick = ev => {
+        ev.stopPropagation();
         fetch('/mode/pool/remove', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
+          method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({filename: fn})
         }).then(loadConfig)
           .catch(e => showMsg("Request failed: " + e, "danger"));
       };
-      li.appendChild(btn);
-      ul.appendChild(li);
+
+      card.append(img, nm, rm);
+      grid.appendChild(card);
     });
-  });
+  }).catch(() => {});
 }
 
-document.getElementById('singleForm').onsubmit = e => {
+$('singleForm').onsubmit = e => {
   e.preventDefault();
-  doAction('/mode/single', {method:'POST', body:new FormData(e.target)}, "Uploading...");
+  doAction('/mode/single', {method:'POST', body:new FormData(e.target)}, "Uploading&hellip;");
 };
 
-document.getElementById('addPoolForm').onsubmit = e => {
+$('addPoolForm').onsubmit = e => {
   e.preventDefault();
-  showMsg("Adding to pool...", "info");
+  if (!e.target.images.files.length) { showMsg("Choose files first", "danger"); return; }
+  showMsg("Adding to pool&hellip;", "info", true);
   fetch('/mode/pool/add', {method:'POST', body:new FormData(e.target)})
     .then(r => {
-      if (r.ok) { showMsg("Done.", "success"); loadConfig(); }
+      if (r.ok) { showMsg("Added to pool", "success"); e.target.reset(); loadConfig(); }
       else showMsg("Upload failed (" + r.status + ")", "danger");
     })
     .catch(e => showMsg("Request failed: " + e, "danger"));
 };
 
-document.getElementById('setPool').onclick = () =>
-  doAction('/mode/pool/set', {method:'POST'}, "Setting pool mode...");
+$('setPool').onclick = () =>
+  doAction('/mode/pool/set', {method:'POST'}, "Setting pool mode&hellip;");
 
-document.getElementById('setFitMode').onclick = () =>
-  doAction('/mode/fit/set', {
+$('applySettings').onclick = () => {
+  // sequential: parallel requests would race on the config read-modify-write
+  showMsg("Applying settings&hellip;", "info", true);
+  fetch('/mode/dither/set', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({fit_mode: document.getElementById('fitModeSelect').value})
-  }, "Applying fit mode...");
+    body: JSON.stringify({algorithm: $('ditherSelect').value})
+  }).then(r => {
+    if (!r.ok) throw new Error("dither: HTTP " + r.status);
+    doAction('/mode/fit/set', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({fit_mode: $('fitModeSelect').value})
+    }, "Applying settings&hellip;");
+  }).catch(e => showMsg("Failed: " + e.message, "danger"));
+};
 
-document.getElementById('setDither').onclick = () =>
-  doAction('/mode/dither/set', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({algorithm: document.getElementById('ditherSelect').value})
-  }, "Applying dithering...");
-
-document.getElementById('clearBtn').onclick = () => {
-  showMsg("Clearing screen...", "info");
+$('clearBtn').onclick = () => {
+  showMsg("Clearing screen&hellip;", "info", true);
   fetch('/clear', {method:'POST'})
-    .then(r => showMsg(r.ok ? "Clear queued - panel will blank shortly" : "Error " + r.status,
+    .then(r => showMsg(r.ok ? "Clear queued &mdash; panel will blank shortly" : "Error " + r.status,
                        r.ok ? "success" : "danger"))
     .catch(e => showMsg("Request failed: " + e, "danger"));
 };
 
-document.getElementById('rotateBtn').onclick = () =>
-  doAction('/rotate', {method:'GET'}, "Rotating...");
+$('rotateBtn').onclick = () =>
+  doAction('/rotate', {method:'GET'}, "Rotating&hellip;");
 
 loadConfig();
 pollPreview();
@@ -568,6 +673,8 @@ def pool_add():
     cfg = load_config()
     for f in files:
         fn = secure_filename(f.filename)
+        if not fn:
+            continue
         path = os.path.join(pool_dir, fn)
         f.save(path)
         if fn not in cfg['pool_images']:
@@ -577,7 +684,43 @@ def pool_add():
 
 @app.route('/pool/list', methods=['GET'])
 def pool_list():
-    return jsonify(load_config().get('pool_images', []))
+    cfg = load_config()
+    current = os.path.basename(current_display_path) if current_display_path else None
+    return jsonify(images=cfg.get('pool_images', []), current=current)
+
+def _thumb_path(fn):
+    # extension appended (not replaced) so distinct uploads never collide
+    return os.path.join(thumbs_dir, fn + '.jpg')
+
+@app.route('/pool/thumb/<path:filename>', methods=['GET'])
+def pool_thumb(filename):
+    fn = secure_filename(filename)
+    src = os.path.join(pool_dir, fn)
+    if not fn or not os.path.exists(src):
+        return jsonify(error="Not found"), 404
+    th = _thumb_path(fn)
+    try:
+        if not os.path.exists(th) or os.path.getmtime(th) < os.path.getmtime(src):
+            img = Image.open(src)
+            img = ImageOps.exif_transpose(img)
+            img.thumbnail((240, 180))
+            img.convert("RGB").save(th, "JPEG", quality=80)
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+    return send_file(th, mimetype='image/jpeg')
+
+@app.route('/mode/pool/show', methods=['POST'])
+def pool_show():
+    data = request.get_json() or {}
+    fn = data.get('filename')
+    cfg = load_config()
+    if fn not in cfg.get('pool_images', []):
+        return jsonify(error="Not in pool"), 404
+    p = os.path.join(pool_dir, fn)
+    if not os.path.exists(p):
+        return jsonify(error="File missing"), 404
+    submit_display_path(p)
+    return jsonify(success=True)
 
 @app.route('/mode/pool/remove', methods=['POST'])
 def pool_remove():
@@ -587,9 +730,9 @@ def pool_remove():
     if fn in cfg['pool_images']:
         cfg['pool_images'].remove(fn)
         save_config_persist(cfg)
-        p = os.path.join(pool_dir, fn)
-        if os.path.exists(p):
-            os.remove(p)
+        for p in (os.path.join(pool_dir, fn), _thumb_path(fn)):
+            if os.path.exists(p):
+                os.remove(p)
     return jsonify(success=True)
 
 @app.route('/mode/pool/set', methods=['POST'])
