@@ -30,8 +30,12 @@ single_dir  = os.path.join(picdir, 'single')
 pool_dir    = os.path.join(picdir, 'pool')
 config_path = os.path.join(BASE_DIR, 'config.json')
 
+# GPIO 16 is the power-down signal to the external ATtiny power controller:
+# HIGH tells it the Pi is shutting down so it may cut power. Must stay LOW
+# at all other times, especially during a panel refresh.
+ATTINY_SIGNAL_PIN = 16
 GPIO.setmode(GPIO.BCM)
-GPIO.setup(16, GPIO.OUT, initial=GPIO.LOW)
+GPIO.setup(ATTINY_SIGNAL_PIN, GPIO.OUT, initial=GPIO.LOW)
 
 
 thumbs_dir = os.path.join(picdir, 'thumbs')
@@ -218,6 +222,35 @@ current_display_path = None   # file path of the image currently shown
 rendered_data = None
 rendering_complete = False
 
+# Held for the entire duration of any panel operation (init -> refresh ->
+# sleep). The shutdown watchdog must acquire it before raising the ATtiny
+# signal, so power is never signalled to cut mid-refresh.
+_panel_lock = threading.Lock()
+
+def _attiny_signal_low():
+    """Re-assert the ATtiny power-down signal LOW.
+
+    epd.Init()/epd.sleep() drive the panel's GPIO/SPI C library
+    (module_init/module_exit), which pokes the GPIO subsystem and can
+    momentarily disturb pin 16. Without re-asserting, a stray HIGH glitch
+    can be read by the ATtiny as 'shutting down' and cut power in the
+    middle of an update (one color drawn, the rest not)."""
+    try:
+        GPIO.output(ATTINY_SIGNAL_PIN, GPIO.LOW)
+    except Exception:
+        pass
+
+def _panel_init():
+    """epd init, then immediately pin the ATtiny signal back LOW so the long
+    refresh that follows runs with the signal held safely down."""
+    epd_init_retry()
+    _attiny_signal_low()
+
+def _panel_sleep():
+    """epd deep-sleep/power-down, then re-assert the ATtiny signal LOW."""
+    epd.sleep()
+    _attiny_signal_low()
+
 def _do_display_update(image):
     """Handles EPD init/display/sleep cycle. Runs in the display worker thread."""
     global current_source_image, rendered_data, rendering_complete
@@ -229,17 +262,17 @@ def _do_display_update(image):
         # Perform full clear on every 12th update
         if update_count % 12 == 0:
             time.sleep(1)
-            epd_init_retry()   # Reset + busy-pin wait inside
+            _panel_init()   # Reset + busy-pin wait inside
             time.sleep(1)
             epd.Clear()     # blocks via ReadBusyH until the refresh is done
             time.sleep(1)
-            epd.sleep()     # has an internal 2s settle before power-off
+            _panel_sleep()  # has an internal 2s settle before power-off
             time.sleep(1)
             update_count = 0
 
         # Update image normally
         time.sleep(1)
-        epd_init_retry()
+        _panel_init()
         time.sleep(1)
         try:
             dithered = apply_dithering(image, cfg['dithering'])
@@ -247,7 +280,7 @@ def _do_display_update(image):
             epd.display(buf)
             time.sleep(1)
         finally:
-            epd.sleep()
+            _panel_sleep()
             time.sleep(1)
 
         # Persist the new update_count on top of a FRESH config: settings
@@ -275,8 +308,8 @@ def _do_boot_init():
     a slow or unresponsive panel."""
     try:
         time.sleep(3)  # brief power-on settle
-        epd_init_retry()
-        epd.sleep()
+        _panel_init()
+        _panel_sleep()
         time.sleep(1)
         print("EPD boot init OK")
     except Exception as e:
@@ -285,7 +318,7 @@ def _do_boot_init():
 def _do_clear():
     """Handles EPD clear cycle. Runs in the display worker thread."""
     try:
-        epd_init_retry()
+        _panel_init()
         time.sleep(1)
         epd.Clear()
         time.sleep(1)
@@ -293,7 +326,7 @@ def _do_clear():
         print("EPD clear error:", e)
     finally:
         try:
-            epd.sleep()
+            _panel_sleep()
             time.sleep(1)
         except Exception:
             pass
@@ -310,14 +343,17 @@ def _display_worker():
                 break
         try:
             action = task[0]
-            if action == 'display':
-                _do_display_update(task[1])
-            elif action == 'display_path':
-                _do_display_update(process_image(task[1]))
-            elif action == 'clear':
-                _do_clear()
-            elif action == 'boot':
-                _do_boot_init()
+            # Hold the panel lock for the whole operation so the shutdown
+            # watchdog cannot signal the ATtiny mid-refresh.
+            with _panel_lock:
+                if action == 'display':
+                    _do_display_update(task[1])
+                elif action == 'display_path':
+                    _do_display_update(process_image(task[1]))
+                elif action == 'clear':
+                    _do_clear()
+                elif action == 'boot':
+                    _do_boot_init()
         except Exception as e:
             print("Display worker error:", e)
 
@@ -370,9 +406,12 @@ def watchdog():
     while True:
         time.sleep(60)
         if time.time()-last_activity>TIMEOUT:
-            GPIO.output(16, GPIO.HIGH)
-            time.sleep(15)
-            os.system("sudo shutdown now")
+            # Wait for any in-progress refresh to finish before signalling the
+            # ATtiny, so power is never cut in the middle of an update.
+            with _panel_lock:
+                GPIO.output(ATTINY_SIGNAL_PIN, GPIO.HIGH)
+                time.sleep(15)
+                os.system("sudo shutdown now")
             break
 
 threading.Thread(target=watchdog, daemon=True).start()
