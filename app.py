@@ -80,6 +80,21 @@ def save_config_persist(cfg):
 
 config = load_config()
 
+# ==== Crash/power-loss post-mortem log ====
+# Appended to the SD card with fsync so the LAST line survives an abrupt
+# power cut. After a failure, `cat frame_events.log` shows exactly which
+# phase was running when power died (e.g. "DRF begin" = died mid-refresh).
+events_log = os.path.join(BASE_DIR, 'frame_events.log')
+def _event(msg):
+    try:
+        with open(events_log, 'a') as f:
+            f.write("%.3f %s %s\n" % (time.time(), time.strftime("%H:%M:%S"), msg))
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception:
+        pass
+_event("==== app start ====")
+
 # ==== E-Paper Setup ====
 epd = epd13in3E.EPD()
 
@@ -259,29 +274,35 @@ def _do_display_update(image):
         cfg = load_config()
         update_count = cfg.get('update_count', 0)
 
+        _event("render start (update_count=%d)" % update_count)
         # Perform full clear on every 12th update
         if update_count % 12 == 0:
-            time.sleep(1)
+            time.sleep(5)
             _panel_init()   # Reset + busy-pin wait inside
-            time.sleep(1)
+            time.sleep(5)
+            _event("clear DRF begin")
             epd.Clear()     # blocks via ReadBusyH until the refresh is done
-            time.sleep(1)
+            _event("clear DRF done")
+            time.sleep(5)
             _panel_sleep()  # has an internal 2s settle before power-off
-            time.sleep(1)
+            time.sleep(5)
             update_count = 0
 
         # Update image normally
-        time.sleep(1)
+        time.sleep(5)
         _panel_init()
-        time.sleep(1)
+        time.sleep(5)
         try:
             dithered = apply_dithering(image, cfg['dithering'])
             buf = epd.getbuffer(dithered)
+            _event("image DRF begin")
             epd.display(buf)
-            time.sleep(1)
+            _event("image DRF done")
+            time.sleep(5)
         finally:
             _panel_sleep()
-            time.sleep(1)
+            time.sleep(5)
+        _event("panel asleep")
 
         # Persist the new update_count on top of a FRESH config: settings
         # changed from the web UI while this render was running must not be
@@ -319,15 +340,15 @@ def _do_clear():
     """Handles EPD clear cycle. Runs in the display worker thread."""
     try:
         _panel_init()
-        time.sleep(1)
+        time.sleep(5)
         epd.Clear()
-        time.sleep(1)
+        time.sleep(5)
     except Exception as e:
         print("EPD clear error:", e)
     finally:
         try:
             _panel_sleep()
-            time.sleep(1)
+            time.sleep(5)
         except Exception:
             pass
 
@@ -409,8 +430,10 @@ def watchdog():
             # Wait for any in-progress refresh to finish before signalling the
             # ATtiny, so power is never cut in the middle of an update.
             with _panel_lock:
+                _event("watchdog: idle timeout, raising ATtiny signal")
                 GPIO.output(ATTINY_SIGNAL_PIN, GPIO.HIGH)
                 time.sleep(15)
+                _event("watchdog: shutdown now")
                 os.system("sudo shutdown now")
             break
 
