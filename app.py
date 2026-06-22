@@ -242,6 +242,11 @@ rendering_complete = False
 # signal, so power is never signalled to cut mid-refresh.
 _panel_lock = threading.Lock()
 
+# Seconds to wait before the FIRST refresh after process start, so the
+# battery recovers from the boot current surge before the panel's refresh
+# spike. Only the post-power-on autonomous render ever browned out.
+FIRST_REFRESH_SETTLE = 25
+
 def _attiny_signal_low():
     """Re-assert the ATtiny power-down signal LOW.
 
@@ -354,6 +359,7 @@ def _do_clear():
 
 def _display_worker():
     """Single worker thread that processes display tasks sequentially."""
+    first_task = True
     while True:
         task = _display_queue.get()
         # Drain queue, keep only the latest task
@@ -362,6 +368,16 @@ def _display_worker():
                 task = _display_queue.get_nowait()
             except queue.Empty:
                 break
+        if first_task:
+            first_task = False
+            # Let the battery / power rail recover from the boot current surge
+            # before the first refresh. Brownouts only ever hit the render that
+            # runs right after an ATtiny power-on (boot draw + the panel's
+            # refresh spike overlapping on a sagging battery); a manual update
+            # of an already-settled Pi never failed. Tunable.
+            if task[0] in ('display', 'display_path'):
+                _event("first-refresh settle %ds (battery recovery after boot)" % FIRST_REFRESH_SETTLE)
+                time.sleep(FIRST_REFRESH_SETTLE)
         try:
             action = task[0]
             # Hold the panel lock for the whole operation so the shutdown
